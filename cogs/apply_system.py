@@ -78,6 +78,48 @@ def set_kind_cfg(guild_id: int, kind: str, cfg: dict):
 _sessions: dict[int, dict] = {}
 
 
+def _split_legal_question(questions: list[str]):
+    """If one of the questions asks whether the character is Legal/Illegal,
+    pull it out so it can be answered with buttons instead of free text.
+    Returns (text_questions, legal_question_or_None)."""
+    for i, q in enumerate(questions):
+        ql = q.lower()
+        if "legal" in ql and "illegal" in ql:
+            remaining = questions[:i] + questions[i + 1:]
+            return remaining, q
+    return questions, None
+
+
+class LegalIllegalView(discord.ui.View):
+    """Shown after the text modal, for the one question that asks Legal vs Illegal."""
+
+    def __init__(self, kind: str, text_questions: list[str], text_answers: list[str], legal_question: str):
+        super().__init__(timeout=180)
+        self.kind = kind
+        self.text_questions = text_questions
+        self.text_answers = text_answers
+        self.legal_question = legal_question
+
+    async def _finish(self, interaction: discord.Interaction, choice: str):
+        for c in self.children:
+            c.disabled = True
+        await interaction.response.edit_message(
+            content=f"**{self.legal_question}**\nSelected: **{choice}**",
+            view=self,
+        )
+        full_questions = self.text_questions + [self.legal_question]
+        full_answers = self.text_answers + [choice]
+        await _send_to_review(interaction, self.kind, full_questions, full_answers)
+
+    @discord.ui.button(label="Legal", emoji="⚖️", style=discord.ButtonStyle.success)
+    async def legal_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self._finish(interaction, "Legal")
+
+    @discord.ui.button(label="Illegal", emoji="🚫", style=discord.ButtonStyle.danger)
+    async def illegal_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self._finish(interaction, "Illegal")
+
+
 # ══════════════════════════════════════════════════════════════════════════
 #  Applicant-facing: dynamic question modal
 # ══════════════════════════════════════════════════════════════════════════
@@ -103,6 +145,34 @@ def build_apply_modal(kind: str, questions: list[str]):
     return ModalClass
 
 
+def build_apply_modal_with_choice(kind: str, text_questions: list[str], legal_question: str):
+    """Same as build_apply_modal, but the Legal/Illegal question is answered
+    afterwards with two buttons instead of being a text field here."""
+    fields = {}
+    for i, q in enumerate(text_questions[:5]):
+        fields[f"a{i}"] = discord.ui.TextInput(
+            label=q[:45],
+            style=discord.TextStyle.paragraph if i >= 2 else discord.TextStyle.short,
+            placeholder="Type your answer here...",
+            max_length=500,
+            required=True,
+        )
+
+    async def on_submit(self, interaction: discord.Interaction):
+        answers = [getattr(self, f"a{i}").value for i in range(len(text_questions))]
+        await interaction.response.send_message(
+            content=f"**{legal_question}**\nChoose one:",
+            view=LegalIllegalView(kind, text_questions, answers, legal_question),
+            ephemeral=True,
+        )
+
+    title = f"📋 {KIND_LABELS.get(kind, kind.title())}"[:45]
+    attrs = {"__discord_ui_modal__": True, "title": title, "on_submit": on_submit}
+    attrs.update(fields)
+    ModalClass = type("ApplyModal", (discord.ui.Modal,), attrs)
+    return ModalClass
+
+
 async def _send_to_review(interaction: discord.Interaction, kind: str, questions: list, answers: list):
     cfg = get_kind_cfg(interaction.guild_id, kind)
     review_id = cfg.get("review_channel_id")
@@ -117,22 +187,22 @@ async def _send_to_review(interaction: discord.Interaction, kind: str, questions
         title=f"{KIND_LABELS.get(kind, kind.title())} — New Application",
         description=(
             f"**Applicant:** {interaction.user.mention} (`{interaction.user.display_name}`)\n"
-            f"🆔 `{interaction.user.id}`"
+            f"ID: `{interaction.user.id}`"
         ),
         color=config.WARNING_COLOR,
         timestamp=datetime.now()
     )
     embed.set_thumbnail(url=interaction.user.display_avatar.url)
     for i, (q, a) in enumerate(zip(questions, answers), 1):
-        embed.add_field(name=f"❓ {i}. {q[:50]}", value=a or "—", inline=False)
+        embed.add_field(name=f"{i}. {q[:50]}", value=a or "—", inline=False)
     embed.add_field(
-        name="📅 Account Age",
+        name="Account Age",
         value=f"<t:{int(interaction.user.created_at.timestamp())}:R>",
         inline=True
     )
     if interaction.user.joined_at:
         embed.add_field(
-            name="📥 Joined Server",
+            name="Joined Server",
             value=f"<t:{int(interaction.user.joined_at.timestamp())}:R>",
             inline=True
         )
@@ -158,10 +228,11 @@ class ApplyButtonView(discord.ui.View):
     def __init__(self, kind: str):
         super().__init__(timeout=None)
         self.kind = kind
-        label = "📋 Staff Application" if kind == "staff" else "📋 Apply for Whitelist"
+        label = "Staff Application" if kind == "staff" else "Apply for Whitelist"
         btn = discord.ui.Button(
             label=label,
-            style=discord.ButtonStyle.primary,
+            emoji="↗️",
+            style=discord.ButtonStyle.secondary,
             custom_id=f"apply_open_{kind}",
         )
         btn.callback = self.apply_click
@@ -176,7 +247,11 @@ class ApplyButtonView(discord.ui.View):
                 await interaction.response.send_message("⚠️ You already have this role!", ephemeral=True)
                 return
         questions = cfg.get("questions") or DEFAULT_QUESTIONS.get(self.kind, [])
-        ModalClass = build_apply_modal(self.kind, questions)
+        text_questions, legal_question = _split_legal_question(questions)
+        if legal_question:
+            ModalClass = build_apply_modal_with_choice(self.kind, text_questions, legal_question)
+        else:
+            ModalClass = build_apply_modal(self.kind, questions)
         await interaction.response.send_modal(ModalClass())
 
 
@@ -229,13 +304,13 @@ class ApplyReviewView(discord.ui.View):
         old = interaction.message.embeds[0]
         new_embed = old.copy()
         new_embed.color = config.SUCCESS_COLOR
-        new_embed.title = f"{old.title} — ✅ Accepted"
+        new_embed.title = f"{old.title} — Accepted"
         new_embed.add_field(
-            name="✅ Decision",
+            name="Decision",
             value=(
                 f"Accepted by: {interaction.user.mention}\n"
                 f"<t:{int(datetime.now().timestamp())}:F>\n"
-                f"{'✅ Role given' if role_given else '⚠️ Could not give the role'}"
+                f"{'Role given' if role_given else 'Could not give the role'}"
             ),
             inline=False
         )
@@ -245,11 +320,10 @@ class ApplyReviewView(discord.ui.View):
 
         try:
             dm = discord.Embed(
-                title=f"🎉 Your application was accepted — {interaction.guild.name}!",
+                title=f"Application Update — {interaction.guild.name}",
                 description=(
-                    f"Congrats {member.mention}! 🎊\n\n"
-                    f"Your {KIND_LABELS.get(kind, kind)} was accepted.\n"
-                    f"{'✅ You were given the role automatically.' if role_given else ''}"
+                    f"Your {KIND_LABELS.get(kind, kind)} has been accepted.\n\n"
+                    f"{'The role has been assigned to your account.' if role_given else 'The role could not be assigned automatically — please contact an administrator.'}"
                 ),
                 color=config.SUCCESS_COLOR,
                 timestamp=datetime.now()
@@ -300,10 +374,10 @@ class RejectModal(discord.ui.Modal, title="❌ Rejection Reason"):
         old = interaction.message.embeds[0]
         new_embed = old.copy()
         new_embed.color = config.ERROR_COLOR
-        new_embed.title = f"{old.title} — ❌ Rejected"
+        new_embed.title = f"{old.title} — Rejected"
         new_embed.add_field(
-            name="❌ Decision",
-            value=f"**Rejected** by {interaction.user.mention}\n📝 Reason: {self.reason.value}",
+            name="Decision",
+            value=f"Rejected by {interaction.user.mention}\nReason: {self.reason.value}",
             inline=False
         )
         for c in self.review_view.children:
@@ -313,11 +387,11 @@ class RejectModal(discord.ui.Modal, title="❌ Rejection Reason"):
         if member:
             try:
                 dm = discord.Embed(
-                    title=f"❌ Your application was rejected — {interaction.guild.name}",
+                    title=f"Application Update — {interaction.guild.name}",
                     description=(
-                        f"Sorry {member.mention}, your {KIND_LABELS.get(self.kind, self.kind)} was rejected.\n"
-                        f"📝 Reason: {self.reason.value}\n"
-                        "🔄 You can apply again later."
+                        f"Your {KIND_LABELS.get(self.kind, self.kind)} has been rejected.\n\n"
+                        f"**Reason:**\n{self.reason.value}\n\n"
+                        "You are welcome to apply again in the future."
                     ),
                     color=config.ERROR_COLOR
                 )
@@ -347,8 +421,12 @@ class AskModal(discord.ui.Modal, title="💬 Ask for clarification"):
             return
         try:
             dm = discord.Embed(
-                title=f"💬 Follow-up question — {interaction.guild.name}",
-                description=f"Hi {member.mention},\n\nThe review team needs more info:\n\n**❓ Question:**\n{self.question.value}",
+                title=f"Application Update — {interaction.guild.name}",
+                description=(
+                    f"The review team needs additional information regarding your application:\n\n"
+                    f"**Question:**\n{self.question.value}\n\n"
+                    f"Please contact an administrator to respond."
+                ),
                 color=config.WARNING_COLOR,
                 timestamp=datetime.now()
             )
