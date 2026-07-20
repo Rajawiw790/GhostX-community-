@@ -63,7 +63,7 @@ ACTIVITY_TYPES = [
 ]
 
 STREAM_URL = "https://twitch.tv/ghostx"  # خاص يبقى رابط تويتش/يوتيوب صحيح باش يخدم Streaming
-ROTATE_EVERY_SECONDS = 5
+ROTATE_EVERY_SECONDS = 10
 
 
 def _live_member_count(bot: commands.Bot) -> int:
