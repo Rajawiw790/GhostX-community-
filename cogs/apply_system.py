@@ -228,10 +228,9 @@ class ApplyButtonView(discord.ui.View):
     def __init__(self, kind: str):
         super().__init__(timeout=None)
         self.kind = kind
-        label = "Staff Application" if kind == "staff" else "Apply for Whitelist"
+        label = "Staff Application ↗️" if kind == "staff" else "Apply for Whitelist ↗️"
         btn = discord.ui.Button(
             label=label,
-            emoji="↗️",
             style=discord.ButtonStyle.secondary,
             custom_id=f"apply_open_{kind}",
         )
