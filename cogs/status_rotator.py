@@ -1,30 +1,49 @@
 """
 Rotating Bot Status — Ghostx Community
 ───────────────────────────────────────
-Cycles the bot's "Playing ..." status through the list below so the
-profile doesn't sit on one static line. Add, remove, or reorder entries
-in STATUSES — no other code needs to change.
+Rotates through different activities AND types automatically.
+Add more items in ACTIVITIES. No other code needs to change.
 """
 
 import itertools
+import random
 import discord
 from discord.ext import commands, tasks
 
-# Add/remove lines here — they rotate in this order, then loop back to the start.
-STATUSES = [
-    "By Ghostx",
+# زيد هنا كلشي لي بغيتي. تقدر تزيد 100 سطر
+ACTIVITIES = [
     "Ghostx Community",
-    "🎫 /ticket | Support",
-    "🎵 /play | Music",
+    "By Ghostx",
+    "online 24/7",
+    "GhostX the best",
+    "1773+ Members",
+    "Discord Server",
+    "Games 24/7",
+    "Free Fire Tournaments",
+    "eFootball Matches",
+    "PUBG Rooms",
+    "Valorant Clutches",
+    "CS2 Ranks",
+    "Roblox Games",
+    "SA-MP Server",
+    "Music",
+    "YouTube Videos",
 ]
 
-ROTATE_EVERY_SECONDS = 20
+# الأنواع اللي غادي يدور بينهم
+ACTIVITY_TYPES = [
+    discord.ActivityType.playing,     # Playing
+    discord.ActivityType.watching,    # Watching
+    discord.ActivityType.listening,   # Listening to
+    discord.ActivityType.streaming,   # Streaming
+    discord.ActivityType.competing,   # Competing in
+]
 
+ROTATE_EVERY_SECONDS = 5
 
 class StatusRotator(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
-        self._cycle = itertools.cycle(STATUSES)
         self.rotate.start()
 
     def cog_unload(self):
@@ -32,15 +51,12 @@ class StatusRotator(commands.Cog):
 
     @tasks.loop(seconds=ROTATE_EVERY_SECONDS)
     async def rotate(self):
-        await self.bot.change_presence(
-            status=discord.Status.online,
-            activity=discord.Game(name=next(self._cycle)),
-        )
-
-    @rotate.before_loop
-    async def before_rotate(self):
-        await self.bot.wait_until_ready()
-
-
-async def setup(bot: commands.Bot):
-    await bot.add_cog(StatusRotator(bot))
+        # كل مرة كيختار نوع و اسم عشوائي
+        activity_name = random.choice(ACTIVITIES)
+        activity_type = random.choice(ACTIVITY_TYPES)
+        
+        # إلا كان Streaming خاص ليان
+        if activity_type == discord.ActivityType.streaming:
+            activity = discord.Streaming(name=activity_name, url="https://twitch.tv/ghostx")
+        else:
+            activity = discord.Activity(type=activity_type, name
