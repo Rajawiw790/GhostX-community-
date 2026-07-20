@@ -45,25 +45,25 @@ async def _send_to_review(interaction: discord.Interaction, questions: list, ans
         return
 
     embed = discord.Embed(
-        title="📋 طلب انضمام للستاف — جديد",
+        title="Staff Application — New",
         description=(
-            f"**المتقدم:** {interaction.user.mention} (`{interaction.user.display_name}`)\n"
-            f"🆔 `{interaction.user.id}`"
+            f"**Applicant:** {interaction.user.mention} (`{interaction.user.display_name}`)\n"
+            f"ID: `{interaction.user.id}`"
         ),
         color=config.WARNING_COLOR,
         timestamp=datetime.now()
     )
     embed.set_thumbnail(url=interaction.user.display_avatar.url)
     for i, (q, a) in enumerate(zip(questions, answers), 1):
-        embed.add_field(name=f"❓ {i}. {q[:50]}", value=a or "—", inline=False)
+        embed.add_field(name=f"{i}. {q[:50]}", value=a or "—", inline=False)
     embed.add_field(
-        name="📅 عمر الحساب",
+        name="Account age",
         value=f"<t:{int(interaction.user.created_at.timestamp())}:R>",
         inline=True
     )
     if interaction.user.joined_at:
         embed.add_field(
-            name="📥 في السيرفر منذ",
+            name="Joined server",
             value=f"<t:{int(interaction.user.joined_at.timestamp())}:R>",
             inline=True
         )
@@ -135,13 +135,13 @@ class ReviewView(discord.ui.View):
         old = interaction.message.embeds[0]
         new_embed = old.copy()
         new_embed.color = config.SUCCESS_COLOR
-        new_embed.title = "📋 طلب انضمام للستاف — ✅ مقبول"
+        new_embed.title = "Staff Application — Accepted"
         new_embed.add_field(
-            name="✅ القرار",
+            name="Decision",
             value=(
-                f"قَبِل: {interaction.user.mention}\n"
+                f"Accepted by: {interaction.user.mention}\n"
                 f"<t:{int(datetime.now().timestamp())}:F>\n"
-                f"{'✅ الرتبة أُعطيت' if role_given else '⚠️ تعذّر إعطاء الرتبة'}"
+                f"{'Role assigned' if role_given else 'Role could not be assigned'}"
             ),
             inline=False
         )
@@ -152,12 +152,10 @@ class ReviewView(discord.ui.View):
         # DM للعضو
         try:
             dm = discord.Embed(
-                title=f"🎉 تم قبول طلبك في {interaction.guild.name}!",
+                title=f"Staff Application Update — {interaction.guild.name}",
                 description=(
-                    f"مبروك {member.mention}! 🎊\n\n"
-                    f"تم قبولك في فريق الستاف.\n"
-                    f"{'✅ تم إعطاؤك الرتبة تلقائياً.' if role_given else ''}\n\n"
-                    f"نتطلع لتعاونك! 💪"
+                    f"Your application to join the staff team has been accepted.\n\n"
+                    f"{'The staff role has been assigned to your account.' if role_given else 'The staff role could not be assigned automatically — please contact an administrator.'}"
                 ),
                 color=config.SUCCESS_COLOR,
                 timestamp=datetime.now()
@@ -213,13 +211,13 @@ class RejectModal(discord.ui.Modal, title="❌ سبب الرفض"):
         old = self.msg.embeds[0]
         new_embed = old.copy()
         new_embed.color = config.ERROR_COLOR
-        new_embed.title = "📋 طلب انضمام للستاف — ❌ مرفوض"
+        new_embed.title = "Staff Application — Rejected"
         new_embed.add_field(
-            name="❌ القرار",
+            name="Decision",
             value=(
-                f"رفض: {interaction.user.mention}\n"
+                f"Rejected by: {interaction.user.mention}\n"
                 f"<t:{int(datetime.now().timestamp())}:F>\n"
-                f"📝 السبب: {self.reason.value}"
+                f"Reason: {self.reason.value}"
             ),
             inline=False
         )
@@ -230,12 +228,11 @@ class RejectModal(discord.ui.Modal, title="❌ سبب الرفض"):
         if member:
             try:
                 dm = discord.Embed(
-                    title=f"😔 تم رفض طلبك في {interaction.guild.name}",
+                    title=f"Staff Application Update — {interaction.guild.name}",
                     description=(
-                        f"عزيزي {member.mention},\n\n"
-                        f"نأسف، تم رفض طلبك للانضمام للستاف.\n\n"
-                        f"**📝 السبب:**\n{self.reason.value}\n\n"
-                        f"يمكنك إعادة التقديم لاحقاً. حظاً موفقاً! 💙"
+                        f"Your application to join the staff team has been rejected.\n\n"
+                        f"**Reason:**\n{self.reason.value}\n\n"
+                        f"You are welcome to apply again in the future."
                     ),
                     color=config.ERROR_COLOR,
                     timestamp=datetime.now()
@@ -270,12 +267,11 @@ class AskModal(discord.ui.Modal, title="💬 طلب توضيح إضافي"):
             return
         try:
             dm = discord.Embed(
-                title=f"💬 طلب توضيح — {interaction.guild.name}",
+                title=f"Staff Application Update — {interaction.guild.name}",
                 description=(
-                    f"مرحباً {member.mention},\n\n"
-                    f"فريق الإدارة يطلب توضيحاً إضافياً بخصوص طلبك:\n\n"
-                    f"**❓ السؤال:**\n{self.question.value}\n\n"
-                    f"يرجى التواصل مع أحد الأدمن للرد."
+                    f"The staff team needs additional clarification regarding your application:\n\n"
+                    f"**Question:**\n{self.question.value}\n\n"
+                    f"Please contact an administrator to respond."
                 ),
                 color=config.WARNING_COLOR,
                 timestamp=datetime.now()
@@ -298,7 +294,7 @@ class StaffApplyView(discord.ui.View):
 
     @discord.ui.button(
         label="📋 تقديم طلب ستاف",
-        style=discord.ButtonStyle.primary,
+        style=discord.ButtonStyle.secondary,
         custom_id="staff_apply_btn",
         emoji="📋"
     )
@@ -462,3 +458,4 @@ class StaffApplication(commands.Cog):
 
 async def setup(bot):
     await bot.add_cog(StaffApplication(bot))
+ 
