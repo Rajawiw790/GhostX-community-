@@ -8,7 +8,6 @@ import asyncio
 import db
 
 from cogs import panel_settings
-from cogs import emoji_loader
 
 TICKET_COLLECTION = "tickets"
 BUTTON_COLLECTION = "ticket_buttons"
@@ -144,20 +143,20 @@ async def _create_ticket(interaction: discord.Interaction, problem_text: str):
         await interaction.followup.send(f"❌ Failed to create ticket channel: {e}", ephemeral=True)
         return
 
-    # ── Build the ticket embed — the reason the member typed is the whole
-    #    point of this message, so it now leads the embed as the description
-    #    (bold label + blockquote) instead of being buried under a field.
-    #    Opener/role/instructions move down into compact fields. ──
-    support_icon = emoji_loader.get("fl_support")
-    instructions_text = panel_settings.render(panel_settings.get("ticket_instructions_text")) or (
-        "Please write what you need right away instead of waiting for staff to reply first."
+    # ── Build the ticket embed — kept short on purpose: one field, one
+    #    emoji (the title), reason leads as the description. ──
+    note_text = cfg.get("panel_message") or panel_settings.render(panel_settings.get("ticket_instructions_text")) or (
+        "Please write what you need — our team will be with you shortly."
     )
-    custom_msg = cfg.get("panel_message") or "Our support team will be with you shortly."
-    reason_label = panel_settings.get("ticket_reason_label") or "🗒️ Ticket Reason"
+    reason_label = panel_settings.get("ticket_reason_label") or "Ticket Reason"
+
+    opened_line = f"{interaction.user.mention} • <t:{int(datetime.now().timestamp())}:R>"
+    if support_role:
+        opened_line += f" • {support_role.mention}"
 
     embed = discord.Embed(
         title=f"🎫 Ticket — {interaction.user.display_name}",
-        description=f"**{reason_label}**\n>>> {problem_text[:500]}",
+        description=f"**{reason_label}**\n>>> {problem_text[:350]}",
         color=config.EMBED_COLOR,
         timestamp=datetime.now(),
     )
@@ -167,14 +166,8 @@ async def _create_ticket(interaction: discord.Interaction, problem_text: str):
     if banner_url:
         embed.set_image(url=banner_url)
 
-    embed.add_field(
-        name="👤 Opened by",
-        value=f"{interaction.user.mention} • <t:{int(datetime.now().timestamp())}:R>",
-        inline=True,
-    )
-    if support_role:
-        embed.add_field(name=f"{support_icon} Assigned role".strip(), value=support_role.mention, inline=True)
-    embed.add_field(name="ℹ️ Info", value=f"{instructions_text}\n{custom_msg}"[:600], inline=False)
+    embed.add_field(name="Opened by", value=opened_line, inline=False)
+    embed.add_field(name="Note", value=note_text[:200], inline=False)
     embed.set_footer(text=f"{config.BOT_NAME} | Dev: {config.DEVELOPER}")
 
     ping_parts = [interaction.user.mention]
@@ -441,7 +434,8 @@ class Tickets(commands.Cog):
         category="Category where new ticket channels will be created (optional)",
         support_role="Role that can see and claim tickets (optional)",
         log_channel="Channel where closed ticket transcripts are sent (optional)",
-        panel_message="Message shown inside opened tickets (optional)",
+        panel_title="Title of the panel embed (optional)",
+        panel_message="Panel embed description, also shown inside opened tickets (optional)",
         banner_url="Banner image URL for the ticket embed (optional)",
     )
     async def ticket_setup(
@@ -451,6 +445,7 @@ class Tickets(commands.Cog):
         category: discord.CategoryChannel = None,
         support_role: discord.Role = None,
         log_channel: discord.TextChannel = None,
+        panel_title: str = None,
         panel_message: str = None,
         banner_url: str = None,
     ):
@@ -459,6 +454,7 @@ class Tickets(commands.Cog):
             "category_id": category.id if category else None,
             "support_role_id": support_role.id if support_role else None,
             "log_channel_id": log_channel.id if log_channel else None,
+            "panel_title": panel_title or "🎫 Support Tickets",
             "panel_message": panel_message or "Our support team will be with you shortly.",
             "banner_url": banner_url or "",
         }
@@ -467,7 +463,7 @@ class Tickets(commands.Cog):
         save_tickets(ts)
 
         panel_embed = discord.Embed(
-            title="🎫 Support Tickets",
+            title=cfg["panel_title"],
             description=cfg["panel_message"],
             color=config.EMBED_COLOR
         )
@@ -490,7 +486,8 @@ class Tickets(commands.Cog):
         category="New ticket category (optional)",
         support_role="New support role (optional)",
         log_channel="New transcript log channel (optional)",
-        panel_message="New panel message shown inside tickets (optional)",
+        panel_title="New panel embed title (optional)",
+        panel_message="New panel description, also shown inside tickets (optional)",
         banner_url="New banner image URL (optional)",
     )
     async def ticket_update(
@@ -500,6 +497,7 @@ class Tickets(commands.Cog):
         category: discord.CategoryChannel = None,
         support_role: discord.Role = None,
         log_channel: discord.TextChannel = None,
+        panel_title: str = None,
         panel_message: str = None,
         banner_url: str = None,
     ):
@@ -514,6 +512,7 @@ class Tickets(commands.Cog):
         if category:      cfg["category_id"] = category.id
         if support_role:  cfg["support_role_id"] = support_role.id
         if log_channel:   cfg["log_channel_id"] = log_channel.id
+        if panel_title:   cfg["panel_title"] = panel_title
         if panel_message: cfg["panel_message"] = panel_message
         if banner_url is not None: cfg["banner_url"] = banner_url
 
