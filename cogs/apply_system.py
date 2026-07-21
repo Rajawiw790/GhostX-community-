@@ -255,13 +255,13 @@ class ApplyButtonView(discord.ui.LayoutView):
         button_style = BUTTON_STYLES.get((cfg.get("button_style") or "grey").lower(), discord.ButtonStyle.secondary)
 
         conditions_text = "\n".join(f"{i}. {c}" for i, c in enumerate(conditions, 1))
-        intro_text = (
-            f"# {title}\n\n"
+        default_description = (
             f"**Before applying** to join the **{config.SERVER_NAME}** "
             f"{'Staff Team' if kind == 'staff' else 'Whitelist'}, "
-            f"make sure you meet the following conditions :\n\n"
-            f"{conditions_text}"
+            f"make sure you meet the following conditions :"
         )
+        description = cfg.get("description") or default_description
+        intro_text = f"# {title}\n\n{description}\n\n{conditions_text}"
         notice_text = cfg.get("notice_text") or (
             "> ⚠️ **Important Notice :**\n"
             "> Please fill out the form honestly. Any fake information or "
@@ -528,6 +528,14 @@ class SetupApplyControlView(discord.ui.View):
         current = session.get("questions") or DEFAULT_QUESTIONS.get(session["kind"], [])
         await interaction.response.send_modal(QuestionsModal(self.admin_id, current))
 
+    @discord.ui.button(label="Set Title", emoji="📝", style=discord.ButtonStyle.secondary)
+    async def set_title(self, interaction: discord.Interaction, button: discord.ui.Button):
+        session = _sessions.get(self.admin_id)
+        if not session:
+            await interaction.response.send_message("⚠️ Session expired, run `/setup apply` again.", ephemeral=True)
+            return
+        await interaction.response.send_modal(TitleModal(self.admin_id, session))
+
     @discord.ui.button(label="Set Conditions", emoji="📋", style=discord.ButtonStyle.secondary)
     async def set_conditions(self, interaction: discord.Interaction, button: discord.ui.Button):
         session = _sessions.get(self.admin_id)
@@ -572,6 +580,7 @@ class SetupApplyControlView(discord.ui.View):
             "button_emoji": session.get("button_emoji", "↗️"),
             "button_style": session.get("button_style", "grey"),
             "footer_text": session.get("footer_text", ""),
+            "description": session.get("description", ""),
             "title": title,
             "conditions": conditions,
             "questions": questions,
@@ -643,6 +652,39 @@ class ConditionsModal(discord.ui.Modal, title="📋 Set Conditions"):
         embed = discord.Embed(title="✅ Conditions Saved", color=config.SUCCESS_COLOR)
         for i, c in enumerate(conditions, 1):
             embed.add_field(name=f"📋 {i}", value=c, inline=False)
+        embed.set_footer(text="Click Post Panel when you're ready.")
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
+
+class TitleModal(discord.ui.Modal, title="📝 Set Title & Description"):
+    title_field = discord.ui.TextInput(
+        label="Panel title",
+        placeholder="e.g. Ghostx Community — Staff Application",
+        max_length=100,
+        required=False,
+    )
+    description_field = discord.ui.TextInput(
+        label="Description (shown under the title)",
+        style=discord.TextStyle.paragraph,
+        placeholder="Before applying to join our team, make sure you meet the following conditions :",
+        max_length=500,
+        required=False,
+    )
+
+    def __init__(self, admin_id: int, session: dict):
+        super().__init__()
+        self.admin_id = admin_id
+        self.title_field.default = session.get("title", "")
+        self.description_field.default = session.get("description", "")
+
+    async def on_submit(self, interaction: discord.Interaction):
+        session = _sessions.setdefault(self.admin_id, {})
+        session["title"] = self.title_field.value.strip()
+        session["description"] = self.description_field.value.strip()
+
+        embed = discord.Embed(title="✅ Title & Description Saved", color=config.SUCCESS_COLOR)
+        embed.add_field(name="Title", value=session["title"] or "(default)", inline=False)
+        embed.add_field(name="Description", value=session["description"] or "(default)", inline=False)
         embed.set_footer(text="Click Post Panel when you're ready.")
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
