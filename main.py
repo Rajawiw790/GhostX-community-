@@ -244,11 +244,16 @@ HELP_SECTIONS = [
 
 
 def _section_icon() -> str:
-    """One consistent, single-color icon for every section. Uses a plain
-    unicode arrow — NOT emoji_loader — because a missing/invalid custom
-    emoji here breaks the ENTIRE select menu (Discord rejects all options
-    at once with 'Invalid emoji' if even one is malformed)."""
-    return "▸"
+    """One consistent, single-color icon for every section. Uses a real,
+    standard Unicode emoji (not emoji_loader) because a missing/invalid
+    custom emoji here breaks the ENTIRE select menu (Discord rejects all
+    options at once with 'Invalid emoji' if even one is malformed).
+
+    NOTE: plain geometric shapes like '▸' are NOT always accepted by
+    Discord's emoji validation for SelectOption — using a real emoji
+    codepoint avoids that edge case entirely.
+    """
+    return "🔹"
 
 
 class HelpSelect(discord.ui.Select):
