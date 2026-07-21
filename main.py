@@ -58,7 +58,6 @@ class GhostxBot(commands.Bot):
             from cogs.tickets import TicketCreateView, TicketControlView
             from cogs.tickets_shop import ShopTicketDirectView, ShopTicketControlView
             from cogs.verify import VerifyView
-            from cogs.whitelist import WhitelistApplyView, ReviewView
             from cogs.staff_application import StaffApplyView
             from cogs.create_voice import VoiceControlView
             from cogs.resources import ResourceReviewView, ResourceSubmitPanelView
@@ -69,7 +68,6 @@ class GhostxBot(commands.Bot):
             self.add_view(ShopTicketDirectView())
             self.add_view(ShopTicketControlView())
             self.add_view(VerifyView())
-            self.add_view(WhitelistApplyView())
             self.add_view(StaffApplyView())
             self.add_view(VoiceControlView())
             self.add_view(ResourceReviewView())
