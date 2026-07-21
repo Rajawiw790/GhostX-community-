@@ -540,68 +540,17 @@ class AskModal(discord.ui.Modal, title="💬 Ask for clarification"):
 
 
 # ══════════════════════════════════════════════════════════════════════════
-#  Emoji picker — Select menu so admins choose a button emoji by clicking,
-#  instead of typing its name or a custom emoji code.
+#  Emoji picker — Discord bots can't summon the native emoji picker from a
+#  button or select menu (that panel only opens from the client's own
+#  "add reaction" icon on a message). So instead: the bot posts a small
+#  prompt message, the admin taps the ➕ reaction icon on THAT message —
+#  which opens their real emoji picker (server emojis, favorites, search,
+#  everything) — and whatever emoji they react with is what gets saved.
+#  No typing, no codes, full picker. See ApplySystem.on_raw_reaction_add
+#  below for where the reaction is caught.
 # ══════════════════════════════════════════════════════════════════════════
-EMOJI_CHOICES = [
-    ("↗️", "Arrow (default)"),
-    ("📋", "Clipboard"),
-    ("✅", "Check mark"),
-    ("🎮", "Controller"),
-    ("⚔️", "Crossed swords"),
-    ("🛡️", "Shield"),
-    ("👮", "Officer"),
-    ("📝", "Memo"),
-    ("⭐", "Star"),
-    ("🔥", "Fire"),
-    ("🚀", "Rocket"),
-    ("💼", "Briefcase"),
-    ("🎯", "Target"),
-    ("🔒", "Lock"),
-    ("👑", "Crown"),
-    ("None", "No emoji"),
-]
-
-
-class EmojiPickerView(discord.ui.View):
-    def __init__(self, admin_id: int):
-        super().__init__(timeout=180)
-        self.admin_id = admin_id
-
-        select = discord.ui.Select(
-            placeholder="Choose a button emoji…",
-            min_values=1,
-            max_values=1,
-            options=[
-                discord.SelectOption(
-                    label=name,
-                    value=emoji,
-                    emoji=emoji if emoji != "None" else None,
-                )
-                for emoji, name in EMOJI_CHOICES
-            ],
-        )
-        select.callback = self.on_select
-        self.add_item(select)
-
-    async def interaction_check(self, interaction: discord.Interaction) -> bool:
-        if interaction.user.id != self.admin_id:
-            await interaction.response.send_message("❌ Only the admin who ran /setup apply can use this.", ephemeral=True)
-            return False
-        return True
-
-    async def on_select(self, interaction: discord.Interaction):
-        chosen = interaction.data["values"][0]
-        session = _sessions.setdefault(self.admin_id, {})
-        session["button_emoji"] = "" if chosen == "None" else chosen
-
-        for c in self.children:
-            c.disabled = True
-
-        embed = discord.Embed(title="✅ Emoji Saved", color=config.SUCCESS_COLOR)
-        embed.add_field(name="Emoji", value=(session["button_emoji"] or "(none)"), inline=True)
-        embed.set_footer(text="Click Post Panel when you're ready.")
-        await interaction.response.edit_message(embed=embed, view=self)
+# message_id -> {"admin_id": int, "interaction": discord.Interaction}
+_pending_emoji_picks: dict[int, dict] = {}
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -659,10 +608,19 @@ class SetupApplyControlView(discord.ui.View):
             await interaction.response.send_message("⚠️ Session expired, run `/setup apply` again.", ephemeral=True)
             return
         await interaction.response.send_message(
-            "Pick a button emoji from the list below:",
-            view=EmojiPickerView(self.admin_id),
+            "👇 A message was posted below — tap its ➕ reaction icon to open your "
+            "full emoji picker (server emojis, favorites, search, everything) and "
+            "react with the one you want. I'll grab it automatically.",
             ephemeral=True,
         )
+        prompt = await interaction.channel.send(
+            f"{interaction.user.mention} react to **this message** with the emoji "
+            f"you want for the button 👇"
+        )
+        _pending_emoji_picks[prompt.id] = {
+            "admin_id": self.admin_id,
+            "interaction": interaction,
+        }
 
     @discord.ui.button(label="Post Panel", emoji="✅", style=discord.ButtonStyle.primary)
     async def post_panel(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -857,6 +815,38 @@ class ApplySystem(commands.Cog):
 
     def __init__(self, bot):
         self.bot = bot
+
+    @commands.Cog.listener()
+    async def on_raw_reaction_add(self, payload: discord.RawReactionActionEvent):
+        """Catches the emoji the admin picked via their native emoji picker
+        (see the Set Emoji flow in SetupApplyControlView) and saves it."""
+        pending = _pending_emoji_picks.get(payload.message_id)
+        if not pending or payload.user_id != pending["admin_id"]:
+            return
+
+        _pending_emoji_picks.pop(payload.message_id, None)
+        emoji_str = str(payload.emoji)
+
+        session = _sessions.setdefault(pending["admin_id"], {})
+        session["button_emoji"] = emoji_str
+
+        channel = self.bot.get_channel(payload.channel_id)
+        if channel:
+            try:
+                msg = await channel.fetch_message(payload.message_id)
+                await msg.edit(content=f"✅ Emoji saved: {emoji_str}")
+                await msg.clear_reactions()
+            except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+                pass
+
+        interaction: discord.Interaction = pending["interaction"]
+        try:
+            embed = discord.Embed(title="✅ Emoji Saved", color=config.SUCCESS_COLOR)
+            embed.add_field(name="Emoji", value=emoji_str, inline=True)
+            embed.set_footer(text="Click Post Panel when you're ready.")
+            await interaction.followup.send(embed=embed, ephemeral=True)
+        except discord.HTTPException:
+            pass
 
     @setup_group.command(name="apply", description="📋 Configure the whitelist or staff application system")
     @app_commands.describe(
