@@ -58,7 +58,6 @@ class GhostxBot(commands.Bot):
             from cogs.tickets import TicketCreateView, TicketControlView
             from cogs.tickets_shop import ShopTicketDirectView, ShopTicketControlView
             from cogs.verify import VerifyView
-            from cogs.staff_application import StaffApplyView
             from cogs.create_voice import VoiceControlView
             from cogs.resources import ResourceReviewView, ResourceSubmitPanelView
             from cogs.rules_accept import RulesAcceptView
