@@ -56,7 +56,7 @@ SYSTEM_PROMPT = """
 Ghostx Community
 
 المؤسس والمطور:
-GHOSTX
+GhostX 
 
 التخصص:
 - San Andreas Multiplayer (SAMP)
@@ -80,7 +80,7 @@ GHOSTX
 
 يوجد أيضاً سيرفر:
 
-FASTLIFE ROLEPLAY
+Fastlife RolePlay
 
 رابطه:
 
@@ -150,7 +150,7 @@ https://discord.gg/UVAAgyANK
 
 أجب:
 
-المؤسس والمطور هو GHOSTX.
+المؤسس والمطور هو GhostX.
 
 إذا سأل:
 
