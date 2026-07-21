@@ -25,20 +25,27 @@ class GhostxBot(commands.Bot):
         self._persistent_views_registered = False
 
     async def setup_hook(self):
-        try:
-            await asyncio.wait_for(
-                self.node_pool.create_node(
-                    host=config.LAVALINK_HOST,
-                    port=config.LAVALINK_PORT,
-                    label="MAIN",
-                    password=config.LAVALINK_PASSWORD,
-                    secure=config.LAVALINK_SECURE,
-                ),
-                timeout=5,
-            )
-            print(f'✅ Lavalink node connected ({config.LAVALINK_HOST}:{config.LAVALINK_PORT})')
-        except (asyncio.TimeoutError, Exception) as e:
-            print(f'⚠️ Lavalink node connection failed (skipped): {e}')
+        last_error = None
+        for attempt in range(1, 4):
+            try:
+                await asyncio.wait_for(
+                    self.node_pool.create_node(
+                        host=config.LAVALINK_HOST,
+                        port=config.LAVALINK_PORT,
+                        label="MAIN",
+                        password=config.LAVALINK_PASSWORD,
+                        secure=config.LAVALINK_SECURE,
+                    ),
+                    timeout=30,
+                )
+                print(f'✅ Lavalink node connected ({config.LAVALINK_HOST}:{config.LAVALINK_PORT})')
+                break
+            except (asyncio.TimeoutError, Exception) as e:
+                last_error = e
+                print(f'⚠️ Lavalink connection attempt {attempt}/3 failed: {e!r} (waiting 5s before retry)')
+                await asyncio.sleep(5)
+        else:
+            print(f'⚠️ Lavalink node connection failed after 3 attempts (skipped): {last_error!r}')
             print('   /play and the rest of the music commands won\'t work until a Lavalink server is reachable.')
             print('   See LAVALINK_SETUP.md for how to run one.')
 
