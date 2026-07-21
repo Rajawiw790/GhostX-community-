@@ -46,6 +46,30 @@ class GhostxBot(commands.Bot):
             print(traceback.format_exc())
         # ─────────────────────────────────────────────────────────────────
 
+        # ── Raw WebSocket probe (REST already confirmed working above) ─────
+        ws_scheme = "wss" if config.LAVALINK_SECURE else "ws"
+        ws_url = f"{ws_scheme}://{config.LAVALINK_HOST}:{config.LAVALINK_PORT}/v4/websocket"
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.ws_connect(
+                    ws_url,
+                    headers={
+                        "Authorization": config.LAVALINK_PASSWORD,
+                        "User-Id": str(self.application_id or "0"),
+                        "Client-Name": "GhostxBot/diagnostic",
+                    },
+                    timeout=aiohttp.ClientTimeout(total=10),
+                ) as ws:
+                    print(f'🔎 Raw WS probe to {ws_url} -> connected! Waiting for ready payload...')
+                    msg = await asyncio.wait_for(ws.receive(), timeout=10)
+                    print(f'🔎 Raw WS probe first message: {msg.type} | {str(msg.data)[:300]}')
+                    await ws.close()
+        except Exception as e:
+            import traceback
+            print(f'🔎 Raw WS probe to {ws_url} FAILED: {e!r}')
+            print(traceback.format_exc())
+        # ─────────────────────────────────────────────────────────────────
+
         last_error = None
         for attempt in range(1, 4):
             try:
