@@ -13,20 +13,23 @@ from discord.ext import commands, tasks
 
 # زيد هنا كلشي لي بغيتي، بلا حد — كيدورو بينهم عشوائي.
 ACTIVITIES = [
-    "Ghostx Community",
-    "By GhostX",
+    "Ghostx Community🪐",
+    "By GhostX👑",
     "Made by GhostX",
     "GhostX the best",
-    "online 24/7",
+    "online 24/7🧿",
     "Discord Server",
     "Ghostx.gg",
     "the FastLife family",
+    "Fastlife Roleplay 🗺️",
     "your next favorite server",
-    "Games 24/7",
-    "Free Fire Tournaments",
+    "Games 24/7🌐",
+    "Free Fire☢️",
     "Free Fire Rooms",
     "eFootball Matches",
     "PUBG Rooms",
+    "Developed in Python",
+    "print("Hello")",
     "PUBG Mobile Tournaments",
     "Valorant Clutches",
     "Valorant Ranked",
@@ -62,7 +65,8 @@ ACTIVITY_TYPES = [
     discord.ActivityType.competing,   # Competing in ...
 ]
 
-STREAM_URL = "https://twitch.tv/ghostx"  # خاص يبقى رابط تويتش/يوتيوب صحيح باش يخدم Streaming
+STREAM_URL = "https://youtube.com/@ghostx-e2k?si=PqGLAg-KU2C6DMEu"
+  # خاص يبقى رابط تويتش/يوتيوب صحيح باش يخدم Streaming
 ROTATE_EVERY_SECONDS = 10
 
 
