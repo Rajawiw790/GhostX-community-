@@ -2,7 +2,7 @@ import discord
 from discord.ext import commands
 from discord import app_commands
 import config
-import mafic
+import wavelink
 import os
 import asyncio
 import random
@@ -21,71 +21,29 @@ class GhostxBot(commands.Bot):
     def __init__(self):
         intents = discord.Intents.all()
         super().__init__(command_prefix="!", intents=intents, help_command=None)
-        self.node_pool = mafic.NodePool(self)
         self._persistent_views_registered = False
 
     async def setup_hook(self):
-        # ── Raw diagnostic probe (bypasses mafic entirely) ──────────────────
-        # Isolates whether a hang/timeout is happening at the network level
-        # (DNS/TCP/firewall) or inside mafic's own connection logic.
-        import aiohttp
+        # ── Lavalink connection (via wavelink) ──────────────────────────────
+        # Switched from mafic to wavelink: mafic's node handshake was hanging
+        # indefinitely even though raw HTTP/WebSocket probes to the same
+        # Lavalink server succeeded instantly (confirmed via diagnostics —
+        # network, password, and Lavalink itself were never the problem).
         scheme = "https" if config.LAVALINK_SECURE else "http"
-        probe_url = f"{scheme}://{config.LAVALINK_HOST}:{config.LAVALINK_PORT}/version"
-        try:
-            async with aiohttp.ClientSession() as session:
-                async with session.get(
-                    probe_url,
-                    headers={"Authorization": config.LAVALINK_PASSWORD},
-                    timeout=aiohttp.ClientTimeout(total=10),
-                ) as resp:
-                    body = await resp.text()
-                    print(f'🔎 Raw probe to {probe_url} -> HTTP {resp.status}: {body[:200]}')
-        except Exception as e:
-            import traceback
-            print(f'🔎 Raw probe to {probe_url} FAILED: {e!r}')
-            print(traceback.format_exc())
-        # ─────────────────────────────────────────────────────────────────
-
-        # ── Raw WebSocket probe (REST already confirmed working above) ─────
-        ws_scheme = "wss" if config.LAVALINK_SECURE else "ws"
-        ws_url = f"{ws_scheme}://{config.LAVALINK_HOST}:{config.LAVALINK_PORT}/v4/websocket"
-        try:
-            async with aiohttp.ClientSession() as session:
-                async with session.ws_connect(
-                    ws_url,
-                    headers={
-                        "Authorization": config.LAVALINK_PASSWORD,
-                        "User-Id": str(self.application_id or "0"),
-                        "Client-Name": "GhostxBot/diagnostic",
-                    },
-                    timeout=aiohttp.ClientTimeout(total=10),
-                ) as ws:
-                    print(f'🔎 Raw WS probe to {ws_url} -> connected! Waiting for ready payload...')
-                    msg = await asyncio.wait_for(ws.receive(), timeout=10)
-                    print(f'🔎 Raw WS probe first message: {msg.type} | {str(msg.data)[:300]}')
-                    await ws.close()
-        except Exception as e:
-            import traceback
-            print(f'🔎 Raw WS probe to {ws_url} FAILED: {e!r}')
-            print(traceback.format_exc())
-        # ─────────────────────────────────────────────────────────────────
-
+        node = wavelink.Node(
+            uri=f"{scheme}://{config.LAVALINK_HOST}:{config.LAVALINK_PORT}",
+            password=config.LAVALINK_PASSWORD,
+        )
         last_error = None
         for attempt in range(1, 4):
             try:
                 await asyncio.wait_for(
-                    self.node_pool.create_node(
-                        host=config.LAVALINK_HOST,
-                        port=config.LAVALINK_PORT,
-                        label="MAIN",
-                        password=config.LAVALINK_PASSWORD,
-                        secure=config.LAVALINK_SECURE,
-                    ),
+                    wavelink.Pool.connect(nodes=[node], client=self),
                     timeout=30,
                 )
-                print(f'✅ Lavalink node connected ({config.LAVALINK_HOST}:{config.LAVALINK_PORT})')
+                print(f'✅ Lavalink node connected via wavelink ({config.LAVALINK_HOST}:{config.LAVALINK_PORT})')
                 break
-            except (asyncio.TimeoutError, Exception) as e:
+            except Exception as e:
                 last_error = e
                 print(f'⚠️ Lavalink connection attempt {attempt}/3 failed: {e!r} (waiting 5s before retry)')
                 await asyncio.sleep(5)
