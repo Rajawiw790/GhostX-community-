@@ -1,6 +1,6 @@
 """
 Unified Application System — Ghostx Community
-Professional NordRP-style apply panels.
+Professional GHOSTX-style apply panels.
   /setup apply kind:staff     apply_channel review_channel role reviewer_role banner_url
   /setup apply kind:whitelist apply_channel review_channel role reviewer_role banner_url
 """
@@ -293,7 +293,7 @@ class ApplyButtonView(discord.ui.LayoutView):
         items.append(discord.ui.Separator())
         # Section = text on the left, accessory (the button) lined up on the
         # right, on the SAME row — this is what puts the button next to the
-        # footer line inside the card, exactly like the NordRP panel.
+        # footer line inside the card, exactly like the GHOSTX panel.
         items.append(discord.ui.Section(discord.ui.TextDisplay(footer_text), accessory=btn))
 
         container = discord.ui.Container(*items, accent_color=0x3B82F6)
@@ -540,6 +540,71 @@ class AskModal(discord.ui.Modal, title="💬 Ask for clarification"):
 
 
 # ══════════════════════════════════════════════════════════════════════════
+#  Emoji picker — Select menu so admins choose a button emoji by clicking,
+#  instead of typing its name or a custom emoji code.
+# ══════════════════════════════════════════════════════════════════════════
+EMOJI_CHOICES = [
+    ("↗️", "Arrow (default)"),
+    ("📋", "Clipboard"),
+    ("✅", "Check mark"),
+    ("🎮", "Controller"),
+    ("⚔️", "Crossed swords"),
+    ("🛡️", "Shield"),
+    ("👮", "Officer"),
+    ("📝", "Memo"),
+    ("⭐", "Star"),
+    ("🔥", "Fire"),
+    ("🚀", "Rocket"),
+    ("💼", "Briefcase"),
+    ("🎯", "Target"),
+    ("🔒", "Lock"),
+    ("👑", "Crown"),
+    ("None", "No emoji"),
+]
+
+
+class EmojiPickerView(discord.ui.View):
+    def __init__(self, admin_id: int):
+        super().__init__(timeout=180)
+        self.admin_id = admin_id
+
+        select = discord.ui.Select(
+            placeholder="Choose a button emoji…",
+            min_values=1,
+            max_values=1,
+            options=[
+                discord.SelectOption(
+                    label=name,
+                    value=emoji,
+                    emoji=emoji if emoji != "None" else None,
+                )
+                for emoji, name in EMOJI_CHOICES
+            ],
+        )
+        select.callback = self.on_select
+        self.add_item(select)
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.admin_id:
+            await interaction.response.send_message("❌ Only the admin who ran /setup apply can use this.", ephemeral=True)
+            return False
+        return True
+
+    async def on_select(self, interaction: discord.Interaction):
+        chosen = interaction.data["values"][0]
+        session = _sessions.setdefault(self.admin_id, {})
+        session["button_emoji"] = "" if chosen == "None" else chosen
+
+        for c in self.children:
+            c.disabled = True
+
+        embed = discord.Embed(title="✅ Emoji Saved", color=config.SUCCESS_COLOR)
+        embed.add_field(name="Emoji", value=(session["button_emoji"] or "(none)"), inline=True)
+        embed.set_footer(text="Click Post Panel when you're ready.")
+        await interaction.response.edit_message(embed=embed, view=self)
+
+
+# ══════════════════════════════════════════════════════════════════════════
 #  Admin-facing: /setup apply control panel
 # ══════════════════════════════════════════════════════════════════════════
 class SetupApplyControlView(discord.ui.View):
@@ -579,13 +644,25 @@ class SetupApplyControlView(discord.ui.View):
         current = session.get("conditions") or DEFAULT_CONDITIONS.get(session["kind"], [])
         await interaction.response.send_modal(ConditionsModal(self.admin_id, current))
 
-    @discord.ui.button(label="Set Button", emoji="🎛️", style=discord.ButtonStyle.secondary)
+    @discord.ui.button(label="Set Button Text", emoji="🎛️", style=discord.ButtonStyle.secondary)
     async def set_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         session = _sessions.get(self.admin_id)
         if not session:
             await interaction.response.send_message("⚠️ Session expired, run `/setup apply` again.", ephemeral=True)
             return
         await interaction.response.send_modal(ButtonModal(self.admin_id, session))
+
+    @discord.ui.button(label="Set Emoji", emoji="😀", style=discord.ButtonStyle.secondary)
+    async def set_emoji(self, interaction: discord.Interaction, button: discord.ui.Button):
+        session = _sessions.get(self.admin_id)
+        if not session:
+            await interaction.response.send_message("⚠️ Session expired, run `/setup apply` again.", ephemeral=True)
+            return
+        await interaction.response.send_message(
+            "Pick a button emoji from the list below:",
+            view=EmojiPickerView(self.admin_id),
+            ephemeral=True,
+        )
 
     @discord.ui.button(label="Post Panel", emoji="✅", style=discord.ButtonStyle.primary)
     async def post_panel(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -693,7 +770,7 @@ class ConditionsModal(discord.ui.Modal, title="📋 Set Conditions"):
 class TitleModal(discord.ui.Modal, title="📝 Set Title & Description"):
     title_field = discord.ui.TextInput(
         label="Panel title",
-        placeholder="e.g. Ghostx Community — Staff Application",
+        placeholder="e.g. GHOSTX Community — Staff Application",
         max_length=100,
         required=False,
     )
@@ -723,16 +800,10 @@ class TitleModal(discord.ui.Modal, title="📝 Set Title & Description"):
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
 
-class ButtonModal(discord.ui.Modal, title="🎛️ Customize Button & Message"):
+class ButtonModal(discord.ui.Modal, title="🎛️ Customize Button Text"):
     label_field = discord.ui.TextInput(
         label="Button label",
         placeholder="e.g. Staff Application / Apply for Whitelist",
-        max_length=80,
-        required=False,
-    )
-    emoji_field = discord.ui.TextInput(
-        label="Button emoji",
-        placeholder="e.g. ↗️ or a custom emoji like <:name:id>",
         max_length=80,
         required=False,
     )
@@ -745,7 +816,7 @@ class ButtonModal(discord.ui.Modal, title="🎛️ Customize Button & Message"):
     footer_field = discord.ui.TextInput(
         label="Message shown next to the button",
         style=discord.TextStyle.paragraph,
-        placeholder="With love, Ghostx Team.",
+        placeholder="With love, GHOSTX Team.",
         max_length=200,
         required=False,
     )
@@ -754,26 +825,23 @@ class ButtonModal(discord.ui.Modal, title="🎛️ Customize Button & Message"):
         super().__init__()
         self.admin_id = admin_id
         self.label_field.default = session.get("button_label", "")
-        self.emoji_field.default = session.get("button_emoji", "↗️")
         self.style_field.default = session.get("button_style", "grey")
         self.footer_field.default = session.get("footer_text", "")
 
     async def on_submit(self, interaction: discord.Interaction):
         session = _sessions.setdefault(self.admin_id, {})
         session["button_label"] = self.label_field.value.strip()
-        session["button_emoji"] = self.emoji_field.value.strip()
         style = self.style_field.value.strip().lower() or "grey"
         if style not in BUTTON_STYLES:
             style = "grey"
         session["button_style"] = style
         session["footer_text"] = self.footer_field.value.strip()
 
-        embed = discord.Embed(title="✅ Button & Message Saved", color=config.SUCCESS_COLOR)
+        embed = discord.Embed(title="✅ Button Text Saved", color=config.SUCCESS_COLOR)
         embed.add_field(name="Label", value=session["button_label"] or "(default)", inline=True)
-        embed.add_field(name="Emoji", value=session["button_emoji"] or "(none)", inline=True)
         embed.add_field(name="Color", value=style, inline=True)
         embed.add_field(name="Message", value=session["footer_text"] or "(default)", inline=False)
-        embed.set_footer(text="Click Post Panel when you're ready.")
+        embed.set_footer(text="Use Set Emoji for the icon. Click Post Panel when you're ready.")
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
 
