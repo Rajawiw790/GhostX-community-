@@ -67,7 +67,6 @@ class GhostxBot(commands.Bot):
             self.add_view(ShopTicketDirectView())
             self.add_view(ShopTicketControlView())
             self.add_view(VerifyView())
-            self.add_view(StaffApplyView())
             self.add_view(VoiceControlView())
             self.add_view(ResourceReviewView())
             self.add_view(ResourceSubmitPanelView())
@@ -245,8 +244,11 @@ HELP_SECTIONS = [
 
 
 def _section_icon() -> str:
-    """One consistent, single-color icon for every section (no mixed multicolor emoji)."""
-    return emoji_loader.get("fl_arrow_white") or "▸"
+    """One consistent, single-color icon for every section. Uses a plain
+    unicode arrow — NOT emoji_loader — because a missing/invalid custom
+    emoji here breaks the ENTIRE select menu (Discord rejects all options
+    at once with 'Invalid emoji' if even one is malformed)."""
+    return "▸"
 
 
 class HelpSelect(discord.ui.Select):
