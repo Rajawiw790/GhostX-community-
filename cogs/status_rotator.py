@@ -52,8 +52,6 @@ ACTIVITIES = [
     "/help for commands",
     "🎫 /ticket | Support",
     "🎵 /play | Music",
-    "📦 /resource | Resources",
-    "🎭 /rolepicker | Roles",
 ]
 
 # الأنواع اللي غادي يدور بينهم (كلهم موجودين فـ ديسكورد)
