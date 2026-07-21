@@ -18,6 +18,11 @@ KIND_LABELS = {
     "whitelist": "🎮 Whitelist Application",
 }
 
+KIND_TITLE = {
+    "staff": "Staff",
+    "whitelist": "Whitelist",
+}
+
 DEFAULT_CONDITIONS = {
     "staff": [
         "You must be active in the community.",
@@ -312,6 +317,37 @@ class ApplyButtonView(discord.ui.LayoutView):
 
 
 # ══════════════════════════════════════════════════════════════════════════
+#  DM notifications — Components V2 card (accent bar + separators), instead
+#  of a plain embed, so accept/reject/ask DMs match the branded panel look.
+# ══════════════════════════════════════════════════════════════════════════
+class DecisionCardView(discord.ui.LayoutView):
+    """One-off card used only for DMs — not persistent, no buttons.
+
+    icon         — a single emoji shown next to the heading (✅ / 🚫 / 💬 ...)
+    heading      — e.g. "Whitelist Application Approved"
+    body_lines   — each becomes its own line under the heading
+                   (use "• **Label** : value" for the bullet rows)
+    accent_color — the color of the left accent bar
+    """
+
+    def __init__(self, *, icon: str, heading: str, body_lines: list[str], accent_color: int):
+        super().__init__(timeout=None)
+        footer_text = (
+            f"All Rights Reserved to **{config.SERVER_NAME}** Team - "
+            f"{datetime.now().strftime('%B %d, %Y')}"
+        )
+        items = [
+            discord.ui.TextDisplay(f"# {icon} {heading}"),
+            discord.ui.Separator(),
+            discord.ui.TextDisplay("\n".join(body_lines)),
+            discord.ui.Separator(),
+            discord.ui.TextDisplay(footer_text),
+        ]
+        container = discord.ui.Container(*items, accent_color=accent_color)
+        self.add_item(container)
+
+
+# ══════════════════════════════════════════════════════════════════════════
 #  Staff-facing: Accept / Reject / Ask buttons
 # ══════════════════════════════════════════════════════════════════════════
 class ApplyReviewView(discord.ui.View):
@@ -387,17 +423,16 @@ class ApplyReviewView(discord.ui.View):
         await interaction.message.edit(embed=new_embed, view=self)
 
         try:
-            dm = discord.Embed(
-                title=f"Application Update — {interaction.guild.name}",
-                description=(
-                    f"Your {KIND_LABELS.get(kind, kind)} has been accepted.\n\n"
-                    f"{'The role has been assigned to your account.' if role_given else 'The role could not be assigned automatically — please contact an administrator.'}"
-                ),
-                color=config.SUCCESS_COLOR,
-                timestamp=datetime.now()
+            card = DecisionCardView(
+                icon="✅",
+                heading=f"{KIND_TITLE.get(kind, kind.title())} Application Approved",
+                body_lines=[
+                    f"Your {KIND_TITLE.get(kind, kind).lower()} application has been approved By {interaction.user.mention}.",
+                    f"• **Server** : {interaction.guild.name}",
+                ] + ([] if role_given else ["• ⚠️ The role could not be assigned automatically — contact an administrator."]),
+                accent_color=config.SUCCESS_COLOR,
             )
-            dm.set_footer(text=f"{config.BOT_NAME} | Dev: {config.DEVELOPER}")
-            await member.send(embed=dm)
+            await member.send(view=card)
         except discord.Forbidden:
             pass
 
@@ -454,17 +489,17 @@ class RejectModal(discord.ui.Modal, title="❌ Rejection Reason"):
 
         if member:
             try:
-                dm = discord.Embed(
-                    title=f"Application Update — {interaction.guild.name}",
-                    description=(
-                        f"Your {KIND_LABELS.get(self.kind, self.kind)} has been rejected.\n\n"
-                        f"**Reason:**\n{self.reason.value}\n\n"
-                        "You are welcome to apply again in the future."
-                    ),
-                    color=config.ERROR_COLOR
+                card = DecisionCardView(
+                    icon="🚫",
+                    heading=f"{KIND_TITLE.get(self.kind, self.kind.title())} Application Rejected",
+                    body_lines=[
+                        f"Your {KIND_TITLE.get(self.kind, self.kind).lower()} application has been rejected By {interaction.user.mention}.",
+                        f"• **Server** : {interaction.guild.name}",
+                        f"• **Reason** : {self.reason.value}",
+                    ],
+                    accent_color=config.ERROR_COLOR,
                 )
-                dm.set_footer(text=f"{config.BOT_NAME} | Dev: {config.DEVELOPER}")
-                await member.send(embed=dm)
+                await member.send(view=card)
             except Exception:
                 pass
         await interaction.response.send_message("✅ Rejected and the member was notified.", ephemeral=True)
@@ -488,18 +523,17 @@ class AskModal(discord.ui.Modal, title="💬 Ask for clarification"):
             await interaction.response.send_message("⚠️ Member not found.", ephemeral=True)
             return
         try:
-            dm = discord.Embed(
-                title=f"Application Update — {interaction.guild.name}",
-                description=(
-                    f"The review team needs additional information regarding your application:\n\n"
-                    f"**Question:**\n{self.question.value}\n\n"
-                    f"Please contact an administrator to respond."
-                ),
-                color=config.WARNING_COLOR,
-                timestamp=datetime.now()
+            card = DecisionCardView(
+                icon="💬",
+                heading="Application — More Info Needed",
+                body_lines=[
+                    "The review team needs additional information regarding your application:",
+                    f"• **Question** : {self.question.value}",
+                    "• Please contact an administrator to respond.",
+                ],
+                accent_color=config.WARNING_COLOR,
             )
-            dm.set_footer(text=f"{config.BOT_NAME} | Dev: {config.DEVELOPER}")
-            await member.send(embed=dm)
+            await member.send(view=card)
             await interaction.response.send_message(f"✅ Question sent to {member.mention} via DM.", ephemeral=True)
         except discord.Forbidden:
             await interaction.response.send_message("⚠️ Can't DM that member!", ephemeral=True)
