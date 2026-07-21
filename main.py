@@ -4,8 +4,10 @@ from discord import app_commands
 import config
 import wavelink
 import os
+import socket
 import asyncio
 import random
+import aiohttp
 from datetime import datetime
 from cogs import emoji_loader
 
@@ -29,10 +31,42 @@ class GhostxBot(commands.Bot):
         # indefinitely even though raw HTTP/WebSocket probes to the same
         # Lavalink server succeeded instantly (confirmed via diagnostics —
         # network, password, and Lavalink itself were never the problem).
+        #
+        # wavelink kept hanging the exact same way. Root cause: aiohttp's
+        # default connector lets the system resolver hand back an AAAA
+        # (IPv6) record for the Railway proxy domain, and this container's
+        # egress can't actually route IPv6 — so the TCP connect just sits
+        # there until asyncio.wait_for's own deadline fires, instead of
+        # failing fast. A plain manual probe done at another time can get
+        # lucky (cached A record, different resolver order) and connect
+        # instantly, which is exactly the discrepancy we saw. Pinning the
+        # connector to AF_INET (IPv4-only) removes that variable.
+        #
+        # We build ONE aiohttp session with that connector, run a quick
+        # pre-flight GET over it, and hand that *same* session to
+        # wavelink.Node — if the pre-flight also hung, we'd know this is
+        # still a networking issue rather than something inside wavelink.
         scheme = "https" if config.LAVALINK_SECURE else "http"
+        lavalink_uri = f"{scheme}://{config.LAVALINK_HOST}:{config.LAVALINK_PORT}"
+
+        connector = aiohttp.TCPConnector(family=socket.AF_INET)
+        lavalink_session = aiohttp.ClientSession(connector=connector)
+        self._lavalink_session = lavalink_session  # keep a ref so it isn't GC'd
+
+        try:
+            async with lavalink_session.get(
+                f"{lavalink_uri}/version",
+                timeout=aiohttp.ClientTimeout(total=10),
+            ) as resp:
+                body = await resp.text()
+                print(f'🔎 Lavalink pre-flight GET /version -> HTTP {resp.status}: {body}')
+        except Exception as e:
+            print(f'🔎 Lavalink pre-flight GET /version failed: {e!r}')
+
         node = wavelink.Node(
-            uri=f"{scheme}://{config.LAVALINK_HOST}:{config.LAVALINK_PORT}",
+            uri=lavalink_uri,
             password=config.LAVALINK_PASSWORD,
+            session=lavalink_session,
         )
         last_error = None
         for attempt in range(1, 4):
