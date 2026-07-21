@@ -1,8 +1,8 @@
 """
 Unified Application System — Ghostx Community
 Professional NordRP-style apply panels.
-  /setup apply kind:staff     apply_channel review_channel role banner_url
-  /setup apply kind:whitelist apply_channel review_channel role banner_url
+  /setup apply kind:staff     apply_channel review_channel role reviewer_role banner_url
+  /setup apply kind:whitelist apply_channel review_channel role reviewer_role banner_url
 """
 import discord
 from discord.ext import commands
@@ -221,21 +221,65 @@ async def _send_to_review(interaction: discord.Interaction, kind: str, questions
 
 
 # ══════════════════════════════════════════════════════════════════════════
-#  Applicant-facing: the "Apply" button (styled like NordRP)
+#  Applicant-facing: the whole apply card — Components V2 (Container)
+#  ONE combined message: title + conditions + notice + banner + footer/button
+#  all inside the same card, no separate embed+view.
 # ══════════════════════════════════════════════════════════════════════════
-class ApplyButtonView(discord.ui.View):
-    """Persistent — one instance per kind, registered at startup."""
-    def __init__(self, kind: str):
+class ApplyButtonView(discord.ui.LayoutView):
+    """Persistent — one instance per (guild, kind), rebuilt from cfg.
+    NOTE: constructor is now ApplyButtonView(kind, cfg) — if your startup
+    code re-registers persistent views (e.g. in on_ready/setup_hook), update
+    that call to pass cfg too: ApplyButtonView(kind, get_kind_cfg(guild_id, kind))
+    """
+    def __init__(self, kind: str, cfg: dict):
         super().__init__(timeout=None)
         self.kind = kind
-        label = "Staff Application ↗️" if kind == "staff" else "Apply for Whitelist ↗️"
+
+        title = cfg.get("title") or f"{config.SERVER_NAME} — {KIND_LABELS.get(kind, kind.title())}"
+        conditions = cfg.get("conditions") or DEFAULT_CONDITIONS.get(kind, [])
+        banner_url = cfg.get("banner_url")
+        button_emoji = cfg.get("button_emoji") or "↗️"
+        button_label = "Staff Application" if kind == "staff" else "Apply for Whitelist"
+
+        conditions_text = "\n".join(f"{i}. {c}" for i, c in enumerate(conditions, 1))
+        intro_text = (
+            f"# {title}\n\n"
+            f"**Before applying** to join the **{config.SERVER_NAME}** "
+            f"{'Staff Team' if kind == 'staff' else 'Whitelist'}, "
+            f"make sure you meet the following conditions :\n\n"
+            f"{conditions_text}"
+        )
+        notice_text = (
+            "> ⚠️ **Important Notice :**\n"
+            "> Please fill out the form honestly. Any fake information or "
+            "plagiarized answers will lead to an immediate denial and a "
+            "permanent blacklist from the recruitment."
+        )
+        footer_text = f"With love, **{config.SERVER_NAME}** Team."
+
         btn = discord.ui.Button(
-            label=label,
-            style=discord.ButtonStyle.secondary,
+            label=button_label,
+            emoji=button_emoji,
+            style=discord.ButtonStyle.primary,
             custom_id=f"apply_open_{kind}",
         )
         btn.callback = self.apply_click
-        self.add_item(btn)
+
+        items = [
+            discord.ui.TextDisplay(intro_text),
+            discord.ui.TextDisplay(notice_text),
+        ]
+        if banner_url:
+            items.append(discord.ui.Separator())
+            items.append(discord.ui.MediaGallery(discord.MediaGalleryItem(banner_url)))
+        items.append(discord.ui.Separator())
+        # Section = text on the left, accessory (the button) lined up on the
+        # right, on the SAME row — this is what puts the button next to the
+        # footer line inside the card, exactly like the NordRP panel.
+        items.append(discord.ui.Section(discord.ui.TextDisplay(footer_text), accessory=btn))
+
+        container = discord.ui.Container(*items, accent_color=0x3B82F6)
+        self.add_item(container)
 
     async def apply_click(self, interaction: discord.Interaction):
         cfg = get_kind_cfg(interaction.guild_id, self.kind)
@@ -267,7 +311,19 @@ class ApplyReviewView(discord.ui.View):
         self.btn_ask.custom_id    = f"apply_ask_{kind}_{applicant_id}"
 
     def _admin(self, inter: discord.Interaction) -> bool:
-        return inter.user.guild_permissions.administrator or inter.user.guild_permissions.manage_roles
+        # Admins / manage-roles always allowed
+        if inter.user.guild_permissions.administrator or inter.user.guild_permissions.manage_roles:
+            return True
+        # Otherwise check the configured reviewer role (read live from storage,
+        # since this view is persistent and rebuilt across restarts).
+        kind, _ = self._parse_ids()
+        cfg = get_kind_cfg(inter.guild_id, kind)
+        reviewer_role_id = cfg.get("reviewer_role_id")
+        if reviewer_role_id:
+            role = inter.guild.get_role(reviewer_role_id)
+            if role and role in inter.user.roles:
+                return True
+        return False
 
     def _parse_ids(self) -> tuple[str, int]:
         try:
@@ -484,47 +540,14 @@ class SetupApplyControlView(discord.ui.View):
         questions   = session.get("questions")   or DEFAULT_QUESTIONS.get(kind, [])
         conditions  = session.get("conditions")  or DEFAULT_CONDITIONS.get(kind, [])
         title       = session.get("title")       or f"{config.SERVER_NAME} — {KIND_LABELS.get(kind, kind.title())}"
-        review_ch   = interaction.guild.get_channel(session["review_channel_id"])
-        role        = interaction.guild.get_role(session["role_id"])
-
-        # ─ NordRP-style panel embed ─
-        conditions_text = "\n".join(f"{i}. {c}" for i, c in enumerate(conditions, 1))
-
-        embed = discord.Embed(
-            title=title,
-            color=0x3B82F6,   # bright blue — matches NordRP look
-            timestamp=datetime.now()
-        )
-
-        embed.description = (
-            f"**Before applying** to join the **{config.SERVER_NAME}** "
-            f"{'Staff Team' if kind == 'staff' else 'Whitelist'}, "
-            f"make sure you meet the following conditions :\n\n"
-            f"{conditions_text}"
-        )
-
-        if session.get("banner_url"):
-            embed.set_image(url=session["banner_url"])
-
-        embed.add_field(
-            name="⚠️ Important Notice :",
-            value=(
-                "> Please fill out the form honestly. "
-                "Any fake information or plagiarized answers will lead to an immediate denial "
-                "and a permanent blacklist from the recruitment."
-            ),
-            inline=False
-        )
-
-        embed.set_footer(
-            text=f"All Rights Reserved to {config.SERVER_NAME} Developers · {datetime.now().strftime('%B %d, %Y')}",
-        )
 
         cfg = {
             "apply_channel_id": session["apply_channel_id"],
             "review_channel_id": session["review_channel_id"],
             "role_id": session["role_id"],
+            "reviewer_role_id": session.get("reviewer_role_id"),
             "banner_url": session.get("banner_url", ""),
+            "button_emoji": session.get("button_emoji", "↗️"),
             "title": title,
             "conditions": conditions,
             "questions": questions,
@@ -532,7 +555,11 @@ class SetupApplyControlView(discord.ui.View):
         set_kind_cfg(interaction.guild_id, kind, cfg)
         _sessions.pop(self.admin_id, None)
 
-        await apply_channel.send(embed=embed, view=ApplyButtonView(kind))
+        # Components V2 card — one combined message, no embed involved.
+        panel_view = ApplyButtonView(kind, cfg)
+        await apply_channel.send(view=panel_view)
+        # Re-register as persistent so the button keeps working after a bot restart.
+        interaction.client.add_view(panel_view)
 
         for c in self.children:
             c.disabled = True
@@ -615,6 +642,7 @@ class ApplySystem(commands.Cog):
         apply_channel="Channel where the Apply button will be posted",
         review_channel="Channel where staff review applications",
         role="Role given automatically when an application is accepted",
+        reviewer_role="Role allowed to Accept/Reject/Ask applications (optional, besides admins)",
         banner_url="Banner image URL for the panel embed (optional)",
     )
     @app_commands.choices(kind=[
@@ -628,6 +656,7 @@ class ApplySystem(commands.Cog):
         apply_channel: discord.TextChannel,
         review_channel: discord.TextChannel,
         role: discord.Role,
+        reviewer_role: discord.Role = None,
         banner_url: str = None,
     ):
         existing = get_kind_cfg(interaction.guild_id, kind)
@@ -636,18 +665,27 @@ class ApplySystem(commands.Cog):
             "apply_channel_id": apply_channel.id,
             "review_channel_id": review_channel.id,
             "role_id": role.id,
+            "reviewer_role_id": reviewer_role.id if reviewer_role else existing.get("reviewer_role_id"),
             "banner_url": banner_url or existing.get("banner_url", ""),
             "title": existing.get("title", ""),
             "conditions": existing.get("conditions", []),
             "questions": existing.get("questions", []),
         }
 
+        reviewer_line = ""
+        reviewer_id_final = _sessions[interaction.user.id]["reviewer_role_id"]
+        if reviewer_id_final:
+            reviewer_role_obj = interaction.guild.get_role(reviewer_id_final)
+            if reviewer_role_obj:
+                reviewer_line = f"🛂 Reviewer role: {reviewer_role_obj.mention}\n"
+
         embed = discord.Embed(
             title=f"⚙️ {KIND_LABELS.get(kind, kind.title())} Setup",
             description=(
                 f"📢 Apply channel: {apply_channel.mention}\n"
                 f"🔒 Review channel: {review_channel.mention}\n"
-                f"🏅 Role on accept: {role.mention}\n\n"
+                f"🏅 Role on accept: {role.mention}\n"
+                f"{reviewer_line}\n"
                 "Use the buttons below to set **questions** and **conditions**, "
                 "then click **Post Panel** to publish the panel."
             ),
