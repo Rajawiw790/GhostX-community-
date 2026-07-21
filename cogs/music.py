@@ -13,18 +13,18 @@ Music System — Ghostx Community
 /join   — Join your voice channel
 /leave  — Leave voice channel
 
-Runs on Lavalink via the `mafic` client (see /mnt or README for setup —
+Runs on Lavalink via the `wavelink` client (see LAVALINK_SETUP.md for setup —
 LAVALINK_HOST / LAVALINK_PORT / LAVALINK_PASSWORD / LAVALINK_SECURE in
 config.py or the .env file). The node connection itself is opened once in
 main.py's setup_hook; this cog only ever talks to it through
-interaction.guild.voice_client (a mafic.Player once connected).
+interaction.guild.voice_client (a wavelink.Player once connected).
 """
 
 import discord
 from discord.ext import commands
 from discord import app_commands
 import config
-import mafic
+import wavelink
 from collections import deque
 from dataclasses import dataclass
 from datetime import datetime
@@ -41,12 +41,12 @@ def _fmt(ms) -> str:
 
 @dataclass
 class QueueItem:
-    track: "mafic.Track"
+    track: "wavelink.Playable"
     requester_id: int
 
 
-# ── Per-guild state (kept in the cog, not on the Player — mafic.Player has
-#    no built-in queue, so we track it ourselves) ──────────────────────────
+# ── Per-guild state (kept in the cog, not on the Player — we track our own
+#    queue/loop/volume so /queue, /loop, /nowplaying stay simple) ──────────
 
 class GuildQueue:
     def __init__(self):
@@ -75,20 +75,20 @@ class Music(commands.Cog):
 
     # ── helpers ──────────────────────────────────────────────────────────────
 
-    async def _ensure_voice(self, interaction: discord.Interaction) -> "mafic.Player | None":
+    async def _ensure_voice(self, interaction: discord.Interaction) -> "wavelink.Player | None":
         if not interaction.user.voice:
             await interaction.followup.send(
                 embed=discord.Embed(description="❌ كن في روم صوتي أولاً!", color=config.ERROR_COLOR),
             )
             return None
         vc_ch = interaction.user.voice.channel
-        player: mafic.Player = interaction.guild.voice_client
+        player: wavelink.Player = interaction.guild.voice_client
         try:
             if player and player.channel and player.channel.id != vc_ch.id:
                 await player.disconnect(force=True)
                 player = None
             if not player:
-                player = await vc_ch.connect(cls=mafic.Player, self_deaf=True)
+                player = await vc_ch.connect(cls=wavelink.Player, self_deaf=True)
         except Exception as e:
             # Most common cause here is no Lavalink node being connected yet
             # (see main.py's setup_hook) — surface both possibilities.
@@ -104,9 +104,9 @@ class Music(commands.Cog):
             return None
         return player
 
-    async def _play_next(self, player: "mafic.Player", guild_id: int):
+    async def _play_next(self, player: "wavelink.Player", guild_id: int):
         """Advance the queue by one — called after /play (idle) and after
-        every natural track end via on_track_end below."""
+        every natural track end via on_wavelink_track_end below."""
         gq = get_queue(guild_id)
 
         if gq.skip_requested:
@@ -131,16 +131,16 @@ class Music(commands.Cog):
         embed.add_field(name="⏱️ المدة", value=_fmt(t.length), inline=True)
         embed.add_field(name="🔊 الصوت", value=f"{gq.volume}%", inline=True)
         embed.add_field(name="🔁 Loop", value="✅ مفعل" if gq.loop else "❌ موقوف", inline=True)
-        if t.artwork_url:
-            embed.set_thumbnail(url=t.artwork_url)
+        if t.artwork:
+            embed.set_thumbnail(url=t.artwork)
         embed.set_footer(text=f"{'طلبه: ' + requester + ' | ' if requester else ''}Dev: {config.DEVELOPER}")
         return embed
 
     # ── Lavalink events ──────────────────────────────────────────────────────
 
     @commands.Cog.listener()
-    async def on_track_end(self, event: "mafic.TrackEndEvent"):
-        player = event.player
+    async def on_wavelink_track_end(self, payload: "wavelink.TrackEndEventPayload"):
+        player = payload.player
         guild = getattr(player, "guild", None)
         if not guild:
             return
@@ -153,12 +153,12 @@ class Music(commands.Cog):
                 pass
 
     @commands.Cog.listener()
-    async def on_node_ready(self, node: "mafic.Node"):
-        print(f"✅ Lavalink node ready: {node.label}")
+    async def on_wavelink_node_ready(self, payload: "wavelink.NodeReadyEventPayload"):
+        print(f"✅ Lavalink node ready: {payload.node!r} (session_id={payload.node.session_id})")
 
     @commands.Cog.listener()
-    async def on_node_unavailable(self, node: "mafic.Node"):
-        print(f"⚠️ Lavalink node unavailable: {node.label}")
+    async def on_wavelink_node_disconnected(self, payload: "wavelink.NodeDisconnectedEventPayload"):
+        print(f"⚠️ Lavalink node disconnected: {payload.node!r}")
 
     # ── /join ────────────────────────────────────────────────────────────────
 
@@ -178,7 +178,7 @@ class Music(commands.Cog):
 
     @app_commands.command(name="leave", description="📤 خروج من الروم الصوتي وإيقاف الموسيقى")
     async def leave(self, interaction: discord.Interaction):
-        player: mafic.Player = interaction.guild.voice_client
+        player: wavelink.Player = interaction.guild.voice_client
         if player:
             gq = get_queue(interaction.guild.id)
             gq.queue.clear()
@@ -209,7 +209,7 @@ class Music(commands.Cog):
         gq.text_channel = interaction.channel
 
         try:
-            results = await player.fetch_tracks(query)
+            results: wavelink.Search = await wavelink.Playable.search(query)
         except Exception as e:
             await interaction.followup.send(
                 embed=discord.Embed(
@@ -226,7 +226,7 @@ class Music(commands.Cog):
             )
             return
 
-        is_playlist = isinstance(results, mafic.Playlist)
+        is_playlist = isinstance(results, wavelink.Playlist)
         new_tracks = results.tracks if is_playlist else [results[0]]
         if not new_tracks:
             await interaction.followup.send(
@@ -257,8 +257,8 @@ class Music(commands.Cog):
             )
             embed.add_field(name="⏱️ المدة", value=_fmt(t.length), inline=True)
             embed.add_field(name="📋 موقعه في القائمة", value=f"#{len(gq.queue)}", inline=True)
-            if t.artwork_url:
-                embed.set_thumbnail(url=t.artwork_url)
+            if t.artwork:
+                embed.set_thumbnail(url=t.artwork)
             embed.set_footer(text=f"طلبه: {interaction.user} | Dev: {config.DEVELOPER}")
 
         await interaction.followup.send(embed=embed)
@@ -267,7 +267,7 @@ class Music(commands.Cog):
 
     @app_commands.command(name="skip", description="⏭️ تخطي الأغنية الحالية")
     async def skip(self, interaction: discord.Interaction):
-        player: mafic.Player = interaction.guild.voice_client
+        player: wavelink.Player = interaction.guild.voice_client
         gq = get_queue(interaction.guild.id)
         if not player or not gq.current:
             await interaction.response.send_message(
@@ -276,7 +276,7 @@ class Music(commands.Cog):
             )
             return
         gq.skip_requested = True
-        await player.stop()
+        await player.skip()
         await interaction.response.send_message(
             embed=discord.Embed(description="⏭️ تم تخطي الأغنية.", color=config.SUCCESS_COLOR)
         )
@@ -285,12 +285,12 @@ class Music(commands.Cog):
 
     @app_commands.command(name="stop", description="⏹️ إيقاف الموسيقى وتفريغ القائمة")
     async def stop(self, interaction: discord.Interaction):
-        player: mafic.Player = interaction.guild.voice_client
+        player: wavelink.Player = interaction.guild.voice_client
         gq = get_queue(interaction.guild.id)
         gq.queue.clear()
         gq.current = None
         gq.loop = False
-        if player and player.current:
+        if player and player.playing:
             await player.stop()
         embed = discord.Embed(
             description="⏹️ توقفت الموسيقى وتم تفريغ القائمة.",
@@ -302,8 +302,8 @@ class Music(commands.Cog):
 
     @app_commands.command(name="pause", description="⏸️ إيقاف مؤقت للموسيقى")
     async def pause(self, interaction: discord.Interaction):
-        player: mafic.Player = interaction.guild.voice_client
-        if player and player.current and not player.paused:
+        player: wavelink.Player = interaction.guild.voice_client
+        if player and player.playing and not player.paused:
             await player.pause(True)
             await interaction.response.send_message(
                 embed=discord.Embed(description="⏸️ تم الإيقاف المؤقت.", color=config.WARNING_COLOR)
@@ -318,9 +318,9 @@ class Music(commands.Cog):
 
     @app_commands.command(name="resume", description="▶️ استئناف الموسيقى")
     async def resume(self, interaction: discord.Interaction):
-        player: mafic.Player = interaction.guild.voice_client
+        player: wavelink.Player = interaction.guild.voice_client
         if player and player.paused:
-            await player.resume()
+            await player.pause(False)
             await interaction.response.send_message(
                 embed=discord.Embed(description="▶️ تم استئناف الموسيقى.", color=config.SUCCESS_COLOR)
             )
@@ -392,7 +392,7 @@ class Music(commands.Cog):
     async def volume(self, interaction: discord.Interaction, level: app_commands.Range[int, 0, 100]):
         gq = get_queue(interaction.guild.id)
         gq.volume = level
-        player: mafic.Player = interaction.guild.voice_client
+        player: wavelink.Player = interaction.guild.voice_client
         if player and player.connected:
             await player.set_volume(level)
         embed = discord.Embed(
