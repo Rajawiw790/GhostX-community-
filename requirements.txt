@@ -1,5 +1,5 @@
 discord.py>=2.6.0
-mafic>=2.10.0
+wavelink>=3.4.1,<4.0.0
 pymongo>=4.6.0
 Pillow>=10.0.0
 requests>=2.31.0
