@@ -22,6 +22,7 @@ class GhostxBot(commands.Bot):
         intents = discord.Intents.all()
         super().__init__(command_prefix="!", intents=intents, help_command=None)
         self.node_pool = mafic.NodePool(self)
+        self._persistent_views_registered = False
 
     async def setup_hook(self):
         try:
@@ -49,13 +50,16 @@ class GhostxBot(commands.Bot):
                 except Exception as e:
                     print(f'❌ {file}: {e}')
 
+        # ─ Persistent views that DON'T depend on per-guild stored config ─
+        # (the apply_system panels are guild-specific and need self.guilds
+        # to be populated, so they are registered in on_ready instead — see
+        # _register_apply_views below.)
         try:
             from cogs.tickets import TicketCreateView, TicketControlView
             from cogs.tickets_shop import ShopTicketDirectView, ShopTicketControlView
             from cogs.verify import VerifyView
             from cogs.whitelist import WhitelistApplyView, ReviewView
             from cogs.staff_application import StaffApplyView
-            from cogs.apply_system import ApplyButtonView
             from cogs.create_voice import VoiceControlView
             from cogs.resources import ResourceReviewView, ResourceSubmitPanelView
             from cogs.rules_accept import RulesAcceptView
@@ -67,21 +71,42 @@ class GhostxBot(commands.Bot):
             self.add_view(VerifyView())
             self.add_view(WhitelistApplyView())
             self.add_view(StaffApplyView())
-            self.add_view(ApplyButtonView("staff"))
-            self.add_view(ApplyButtonView("whitelist"))
             self.add_view(VoiceControlView())
             self.add_view(ResourceReviewView())
             self.add_view(ResourceSubmitPanelView())
             self.add_view(RulesAcceptView())
             self.add_view(RolePickerView())
-            print('✅ Persistent views registered')
+            print('✅ Persistent views registered (guild-independent)')
         except Exception as e:
             print(f'⚠️ Persistent views: {e}')
 
         await self.tree.sync()
         print(f'✅ Slash commands synced (global)')
-        
+
+    async def _register_apply_views(self):
+        """Registers one persistent ApplyButtonView (Components V2 card) per
+        guild/kind that has been configured via /setup apply. Must run after
+        the gateway has populated self.guilds, so it's called from on_ready
+        rather than setup_hook. Safe to call more than once (e.g. on
+        reconnect) since add_view is idempotent per custom_id."""
+        try:
+            from cogs.apply_system import ApplyButtonView, get_kind_cfg
+            count = 0
+            for guild in self.guilds:
+                for kind in ("staff", "whitelist"):
+                    cfg = get_kind_cfg(guild.id, kind)
+                    if cfg:
+                        self.add_view(ApplyButtonView(kind, cfg))
+                        count += 1
+            print(f'✅ Apply panel views registered ({count})')
+        except Exception as e:
+            print(f'⚠️ Apply panel views: {e}')
+
     async def on_ready(self):
+        if not self._persistent_views_registered:
+            await self._register_apply_views()
+            self._persistent_views_registered = True
+
         print(f"""
 ╔══════════════════════════════════╗
 ║     🚀 {config.BOT_NAME}        ║
