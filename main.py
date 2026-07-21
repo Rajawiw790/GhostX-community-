@@ -25,6 +25,27 @@ class GhostxBot(commands.Bot):
         self._persistent_views_registered = False
 
     async def setup_hook(self):
+        # ── Raw diagnostic probe (bypasses mafic entirely) ──────────────────
+        # Isolates whether a hang/timeout is happening at the network level
+        # (DNS/TCP/firewall) or inside mafic's own connection logic.
+        import aiohttp
+        scheme = "https" if config.LAVALINK_SECURE else "http"
+        probe_url = f"{scheme}://{config.LAVALINK_HOST}:{config.LAVALINK_PORT}/version"
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(
+                    probe_url,
+                    headers={"Authorization": config.LAVALINK_PASSWORD},
+                    timeout=aiohttp.ClientTimeout(total=10),
+                ) as resp:
+                    body = await resp.text()
+                    print(f'🔎 Raw probe to {probe_url} -> HTTP {resp.status}: {body[:200]}')
+        except Exception as e:
+            import traceback
+            print(f'🔎 Raw probe to {probe_url} FAILED: {e!r}')
+            print(traceback.format_exc())
+        # ─────────────────────────────────────────────────────────────────
+
         last_error = None
         for attempt in range(1, 4):
             try:
