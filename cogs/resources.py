@@ -11,15 +11,19 @@ Resources System v2 — Ghostx Community
 + روم Panel منفصلة فيها زر واحد "📦 Publish Resource" (ستايل Components V2 —
   نفس القالب المستعمل فـ apply_system.py: Container بـ accent bar).
 
-تدفق الاستخدام:
+تدفق الاستخدام — مبسّط لأقصى حد للاعب العادي (2 خطوات وسلا):
   1) Panel button → Dropdown (يختار التصنيف)
-  2) Modal (عنوان + وصف مختصر + شرح كامل)
-  3) البوت كيطلب من العضو (فـ الخاص، أو فـ نفس الروم إلا كانت الرسائل الخاصة
-     مسدودة) يصيفط صورة و/أو ملف و/أو رابط تحميل — كلشي اختياري
+  2) Modal وحيد (عنوان + وصف + رابط تحميل اختياري) → كيتبعت للمراجعة فالحين
+  3) (اختياري بحت) زر "📎 Add screenshot/file" كيظهر ليه بعد التقديم إلا بغا
+     يزيد صورة أو ملف — إلا ما ضغط عليه والو، الطلب ديالو تبعت وخلاص.
   4) الطلب كيتبعت لـ #pending بـ Embed احترافي + أزرار:
      ✅ Approve   ❌ Reject   ✏️ Edit   🚫 Ban User
   5) عند القبول: كيتولد ID تلقائي (مثلاً SAMP-001) وكينشر الريسورس فـ الروم
      المخصصة لتصنيفو، وكيتسجل فـ #logs، وكيتوصل صاحبو برسالة فـ الخاص.
+
+الفكرة: بالنسبة للاعب، التقديم = زر → دروبدون → مودال واحد. خلاص. الجزء
+القوي (صور/ملفات، مراجعة، أكواد تلقائية، بان) كاين كامل ولكن ماشي فرض على
+كل عضو — كيظهر غير لمن يحتاجو.
 
 التخزين: MongoDB عبر db.py (نفس الطبقة لي كتستعملها باقي الكوجز فهاد المشروع) —
   • collection "resource_settings" → document واحد بالـ guild_id كـ doc_id
@@ -36,7 +40,6 @@ from discord.ext import commands
 from discord import app_commands
 import config
 import db
-import re
 import uuid
 import asyncio
 from datetime import datetime
@@ -114,7 +117,6 @@ SETTINGS_DEFAULT_FIELDS = {
 MAX_PENDING_PER_USER = 3
 DM_TIMEOUT_SECONDS = 300
 IMAGE_EXTS = (".png", ".jpg", ".jpeg", ".gif", ".webp")
-URL_RE = re.compile(r"https?://\S+")
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -186,8 +188,7 @@ def search_approved(guild_id: int, query: str) -> list[dict]:
         if r.get("guild_id") == guild_id and r.get("status") == "approved"
         and (
             q in (r.get("title") or "").lower()
-            or q in (r.get("short_description") or "").lower()
-            or q in (r.get("full_description") or "").lower()
+            or q in (r.get("description") or "").lower()
         )
     ]
     rows.sort(key=lambda r: r.get("submitted_at", ""), reverse=True)
@@ -354,13 +355,19 @@ class CategorySelectView(discord.ui.View):
 
 
 class ResourceModal(discord.ui.Modal, title="📦 New Resource"):
+    """One modal, three fields, done — this is the whole submission step
+    for a regular player. Attachments are a separate, fully optional step
+    offered right after (see AddAttachmentView) so nobody is forced through
+    a DM wait just to share a link."""
     resource_title = discord.ui.TextInput(label="Resource title", max_length=80)
-    short_desc = discord.ui.TextInput(label="Short description", max_length=150)
-    full_desc = discord.ui.TextInput(
-        label="Full description",
+    description = discord.ui.TextInput(
+        label="Description — what is it, what does it do?",
         style=discord.TextStyle.paragraph,
-        max_length=2000,
-        min_length=20,
+        max_length=1500,
+        min_length=10,
+    )
+    download_link = discord.ui.TextInput(
+        label="Download link (optional)", max_length=300, required=False
     )
 
     def __init__(self, category: str):
@@ -369,29 +376,28 @@ class ResourceModal(discord.ui.Modal, title="📦 New Resource"):
 
     async def on_submit(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True, thinking=True)
-        await _finish_submission(interaction, self.category, self.resource_title.value, self.short_desc.value, self.full_desc.value)
+        await _finish_submission(interaction, self.category, self.resource_title.value, self.description.value, self.download_link.value or None)
 
 
 # ══════════════════════════════════════════════════════════════════════════
-#  Optional image/file/link collection — Discord modals can't take file
-#  uploads, so this is a normal message wait_for, done over DM (falling back
-#  to the invoking channel if the user's DMs are closed).
+#  Optional image/file attachment — offered AFTER submission, never forced.
+#  The link already lives in the modal, so this step only ever has to
+#  collect an image and/or a file, over DM (falling back to the invoking
+#  channel if the user's DMs are closed).
 # ══════════════════════════════════════════════════════════════════════════
-async def _prompt_for_attachments(interaction: discord.Interaction, title: str):
+async def _prompt_for_files(interaction: discord.Interaction, title: str):
     bot = interaction.client
     prompt = (
-        f"**{title}** — reply here with an image and/or a file and/or a download "
-        f"link (all optional). Type `skip` to continue without any.\n"
+        f"**{title}** — reply here with an image and/or a file to attach "
+        f"(both optional, send one message with either or both). Type `skip` to cancel.\n"
         f"⏱️ You have {DM_TIMEOUT_SECONDS // 60} minutes."
     )
-    used_dm = True
     try:
         dm_channel = await interaction.user.create_dm()
         await dm_channel.send(prompt)
-        await interaction.followup.send("📬 Check your DMs — reply there with an optional image/file/link.", ephemeral=True)
+        await interaction.followup.send("📬 Check your DMs for the upload prompt.", ephemeral=True)
         target_channel_id = dm_channel.id
     except discord.Forbidden:
-        used_dm = False
         await interaction.followup.send(
             "⚠️ I can't DM you — reply **right here in this channel** instead:\n" + prompt, ephemeral=True
         )
@@ -403,7 +409,7 @@ async def _prompt_for_attachments(interaction: discord.Interaction, title: str):
     try:
         msg = await bot.wait_for("message", check=check, timeout=DM_TIMEOUT_SECONDS)
     except asyncio.TimeoutError:
-        return None, None, None, used_dm
+        return None, None
 
     image_file, other_file = None, None
     for att in msg.attachments:
@@ -417,18 +423,53 @@ async def _prompt_for_attachments(interaction: discord.Interaction, title: str):
         elif other_file is None:
             other_file = f
 
-    link = None
-    if msg.content and msg.content.strip().lower() not in ("skip", "تخطي", "لا", "-", "none"):
-        found = URL_RE.search(msg.content)
-        if found:
-            link = found.group(0)
-
-    return image_file, other_file, link, used_dm
+    return image_file, other_file
 
 
-async def _finish_submission(interaction: discord.Interaction, category: str, title: str, short_desc: str, full_desc: str):
-    image_file, other_file, link, used_dm = await _prompt_for_attachments(interaction, title)
+class AddAttachmentView(discord.ui.View):
+    """Sent once, right after a successful submission — a single optional
+    button. Ignoring it costs the player nothing; the request is already
+    sitting in #pending either way."""
 
+    def __init__(self, req_id: str, pending_channel_id: int, pending_message_id: int):
+        super().__init__(timeout=DM_TIMEOUT_SECONDS)
+        self.req_id = req_id
+        self.pending_channel_id = pending_channel_id
+        self.pending_message_id = pending_message_id
+
+    @discord.ui.button(label="Add screenshot / file (optional)", emoji="📎", style=discord.ButtonStyle.secondary)
+    async def add_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        req = get_request(self.req_id)
+        if not req or req["status"] != "pending":
+            await interaction.response.send_message("⚠️ This request was already handled.", ephemeral=True)
+            return
+
+        button.disabled = True
+        await interaction.response.edit_message(view=self)
+        await interaction.followup.send("Go ahead — see your DMs (or this channel) for the upload prompt.", ephemeral=True)
+
+        image_file, other_file = await _prompt_for_files(interaction, req["title"])
+        if not image_file and not other_file:
+            return
+
+        pending_channel = interaction.guild.get_channel(self.pending_channel_id)
+        if not pending_channel:
+            return
+        try:
+            pending_msg = await pending_channel.fetch_message(self.pending_message_id)
+        except (discord.NotFound, discord.HTTPException):
+            return
+
+        embed = pending_msg.embeds[0]
+        files = [f for f in (image_file, other_file) if f]
+        if other_file:
+            embed.add_field(name="📎 Attached file", value=other_file.filename, inline=False)
+        if image_file:
+            embed.set_image(url=f"attachment://{image_file.filename}")
+        await pending_msg.edit(embed=embed, attachments=files)
+
+
+async def _finish_submission(interaction: discord.Interaction, category: str, title: str, description: str, link: str | None):
     settings = get_settings(interaction.guild_id)
     pending_channel = interaction.guild.get_channel(settings["ch_pending"]) if settings else None
     if not pending_channel:
@@ -439,8 +480,7 @@ async def _finish_submission(interaction: discord.Interaction, category: str, ti
         guild_id=interaction.guild_id,
         category=category,
         title=title,
-        short_description=short_desc,
-        full_description=full_desc,
+        description=description,
         download_link=link,
         author_id=interaction.user.id,
         author_name=str(interaction.user),
@@ -448,36 +488,27 @@ async def _finish_submission(interaction: discord.Interaction, category: str, ti
 
     embed = discord.Embed(
         title=f"📥 New Resource — {title}",
-        description=full_desc[:2000],
+        description=description[:2000],
         color=config.WARNING_COLOR,
         timestamp=datetime.now(),
     )
     embed.set_author(name=str(interaction.user), icon_url=interaction.user.display_avatar.url)
     embed.add_field(name="Category", value=CATEGORY_LABELS[category], inline=True)
-    embed.add_field(name="Short description", value=short_desc, inline=False)
     embed.add_field(name="Download link", value=link or "—", inline=False)
-    if other_file:
-        embed.add_field(name="📎 Attached file", value=other_file.filename, inline=False)
     embed.set_footer(text=f"ID: {req_id} | {config.BOT_NAME}")
 
-    files = [f for f in (image_file, other_file) if f]
-    if image_file:
-        embed.set_image(url=f"attachment://{image_file.filename}")
-
-    msg = await pending_channel.send(embed=embed, view=ResourceReviewView(), files=files)
+    msg = await pending_channel.send(embed=embed, view=ResourceReviewView())
     update_request(req_id, pending_channel_id=pending_channel.id, pending_message_id=msg.id)
 
     confirm = discord.Embed(
-        description=(
-            "✅ Your resource was submitted for review! You'll get a DM once "
-            "staff makes a decision."
-            if used_dm else
-            "✅ Your resource was submitted for review! Keep an eye on this "
-            "channel — staff will reply with their decision."
-        ),
+        description="✅ Submitted for review! You'll get a DM once staff makes a decision.",
         color=config.SUCCESS_COLOR,
     )
-    await interaction.followup.send(embed=confirm, ephemeral=True)
+    await interaction.followup.send(
+        embed=confirm,
+        view=AddAttachmentView(req_id, pending_channel.id, msg.id),
+        ephemeral=True,
+    )
 
 
 # ══════════════════════════════════════════════════════════════════════════
@@ -598,12 +629,11 @@ class ResourceReviewView(discord.ui.View):
 
         pub_embed = discord.Embed(
             title=f"{CATEGORY_LABELS[category]} — {req['title']}",
-            description=req["full_description"][:2000],
+            description=req["description"][:2000],
             color=CATEGORY_COLORS.get(category, config.EMBED_COLOR),
             timestamp=datetime.now(),
         )
         pub_embed.set_author(name=req["author_name"])
-        pub_embed.add_field(name="Short description", value=req["short_description"], inline=False)
         if req.get("download_link"):
             pub_embed.add_field(name="Download", value=req["download_link"], inline=False)
         pub_embed.set_footer(text=f"{code} | Verified by Staff | {config.BOT_NAME}")
@@ -722,16 +752,14 @@ class RejectReasonModal(discord.ui.Modal, title="❌ Reject Resource"):
 
 class EditRequestModal(discord.ui.Modal, title="✏️ Edit Resource"):
     resource_title = discord.ui.TextInput(label="Resource title", max_length=80)
-    short_desc = discord.ui.TextInput(label="Short description", max_length=150)
-    full_desc = discord.ui.TextInput(label="Full description", style=discord.TextStyle.paragraph, max_length=2000, min_length=20)
+    description = discord.ui.TextInput(label="Description", style=discord.TextStyle.paragraph, max_length=1500, min_length=10)
     download_link = discord.ui.TextInput(label="Download link (optional)", max_length=300, required=False)
 
     def __init__(self, req_id: str, req: dict):
         super().__init__()
         self.req_id = req_id
         self.resource_title.default = req.get("title", "")
-        self.short_desc.default = req.get("short_description", "")
-        self.full_desc.default = req.get("full_description", "")
+        self.description.default = req.get("description", "")
         self.download_link.default = req.get("download_link") or ""
 
     async def on_submit(self, interaction: discord.Interaction):
@@ -743,18 +771,15 @@ class EditRequestModal(discord.ui.Modal, title="✏️ Edit Resource"):
         update_request(
             self.req_id,
             title=self.resource_title.value,
-            short_description=self.short_desc.value,
-            full_description=self.full_desc.value,
+            description=self.description.value,
             download_link=self.download_link.value or None,
         )
 
         embed = interaction.message.embeds[0]
         embed.title = f"📥 New Resource — {self.resource_title.value}"
-        embed.description = self.full_desc.value[:2000]
+        embed.description = self.description.value[:2000]
         for i, field in enumerate(embed.fields):
-            if field.name == "Short description":
-                embed.set_field_at(i, name="Short description", value=self.short_desc.value, inline=False)
-            elif field.name == "Download link":
+            if field.name == "Download link":
                 embed.set_field_at(i, name="Download link", value=self.download_link.value or "—", inline=False)
 
         await interaction.response.edit_message(embed=embed, view=ResourceReviewView())
@@ -820,7 +845,7 @@ class Resources(commands.Cog):
 
         embed = discord.Embed(title=f"📋 Published Resources ({len(rows)})", color=config.EMBED_COLOR)
         for r in rows[:20]:
-            desc = r["short_description"]
+            desc = r["description"][:80] + ("…" if len(r["description"]) > 80 else "")
             embed.add_field(
                 name=f"{r.get('resource_code', '—')} — {r['title']}",
                 value=f"{desc}\nBy: {r['author_name']}",
@@ -840,9 +865,10 @@ class Resources(commands.Cog):
 
         embed = discord.Embed(title=f"🔍 Results for: {query}", color=config.EMBED_COLOR)
         for r in rows[:15]:
+            desc = r["description"][:80] + ("…" if len(r["description"]) > 80 else "")
             embed.add_field(
                 name=f"{r.get('resource_code', '—')} — {r['title']}",
-                value=f"{r['short_description']}\nBy: {r['author_name']}",
+                value=f"{desc}\nBy: {r['author_name']}",
                 inline=False,
             )
         await interaction.response.send_message(embed=embed, ephemeral=True)
