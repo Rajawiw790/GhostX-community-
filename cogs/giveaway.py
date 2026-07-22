@@ -1,3 +1,7 @@
+"""
+Giveaway System — Ghostx Community
+Same Components V2 card design as the apply panels (Container + accent bar).
+"""
 import discord
 from discord.ext import commands
 from discord import app_commands
@@ -15,24 +19,16 @@ def parse_duration(duration: str) -> int:
     """
     duration = duration.strip().lower()
     pattern = re.findall(r"(\d+)\s*([smhd])", duration)
-
     if not pattern:
         raise ValueError("صيغة المدة غير صحيحة")
-
     units = {"s": 1, "m": 60, "h": 3600, "d": 86400}
-    total_seconds = 0
-    for value, unit in pattern:
-        total_seconds += int(value) * units[unit]
-
-    return total_seconds
+    return sum(int(value) * units[unit] for value, unit in pattern)
 
 
 def format_duration(seconds: int) -> str:
-    """يحول الثواني لنص مفهوم (مثال: 1 يوم 3 ساعات)"""
     days, seconds = divmod(seconds, 86400)
     hours, seconds = divmod(seconds, 3600)
     minutes, seconds = divmod(seconds, 60)
-
     parts = []
     if days:
         parts.append(f"{days} يوم")
@@ -42,30 +38,70 @@ def format_duration(seconds: int) -> str:
         parts.append(f"{minutes} دقيقة")
     if seconds and not parts:
         parts.append(f"{seconds} ثانية")
-
     return " و".join(parts) if parts else "0 ثانية"
 
 
-class GiveawayView(discord.ui.View):
-    def __init__(self, end_time, prize, winners_count):
+# ══════════════════════════════════════════════════════════════════════════
+#  Giveaway card — Components V2 (Container), same design language as the
+#  apply panel: title + details + optional banner + Section(footer, button).
+# ══════════════════════════════════════════════════════════════════════════
+class GiveawayCardView(discord.ui.LayoutView):
+    def __init__(self, giveaway_id: int, prize: str, end_time: datetime, winners_count: int,
+                 banner_url: str = None, footer_text: str = None, participants: set = None):
         super().__init__(timeout=None)
-        self.end_time = end_time
+        self.giveaway_id = giveaway_id
         self.prize = prize
+        self.end_time = end_time
         self.winners_count = winners_count
-        self.participants = set()
+        self.banner_url = banner_url
+        self.footer_text = footer_text or "Good luck to everyone!"
+        self.participants = participants if participants is not None else set()
+        self._build()
 
-    @discord.ui.button(label="دخول السحب", style=discord.ButtonStyle.primary, custom_id="enter_giveaway")
-    async def enter_giveaway(self, interaction: discord.Interaction, button: discord.ui.Button):
+    def _build(self, *, ended: bool = False, decision_text: str = None, accent: int = None):
+        self.clear_items()
+
+        header = f"# 🎉 {self.prize}"
+        details = (
+            f"**Winners :** {self.winners_count}\n"
+            f"**Ends :** <t:{int(self.end_time.timestamp())}:R> (<t:{int(self.end_time.timestamp())}:F>)\n"
+            f"**Participants :** {len(self.participants)}"
+        )
+
+        items = [
+            discord.ui.TextDisplay(header),
+            discord.ui.TextDisplay(details),
+        ]
+        if self.banner_url:
+            items.append(discord.ui.Separator())
+            items.append(discord.ui.MediaGallery(discord.MediaGalleryItem(self.banner_url)))
+        items.append(discord.ui.Separator())
+
+        if ended:
+            items.append(discord.ui.TextDisplay(decision_text))
+        else:
+            btn = discord.ui.Button(
+                label=f"Enter Giveaway ({len(self.participants)})",
+                emoji="🎉",
+                style=discord.ButtonStyle.primary,
+                custom_id=f"giveaway_enter_{self.giveaway_id}",
+            )
+            btn.callback = self.on_enter
+            items.append(discord.ui.Section(discord.ui.TextDisplay(self.footer_text), accessory=btn))
+
+        container = discord.ui.Container(*items, accent_color=accent if accent is not None else 0x3B82F6)
+        self.add_item(container)
+
+    async def on_enter(self, interaction: discord.Interaction):
         if interaction.user.bot:
             await interaction.response.send_message("البوتات لا يمكنها المشاركة.", ephemeral=True)
             return
-
         if interaction.user.id in self.participants:
             await interaction.response.send_message("أنت مشارك بالفعل.", ephemeral=True)
             return
 
         self.participants.add(interaction.user.id)
-        button.label = f"دخول السحب ({len(self.participants)})"
+        self._build()
 
         embed = discord.Embed(
             title="تم دخول السحب",
@@ -74,8 +110,10 @@ class GiveawayView(discord.ui.View):
         )
         embed.set_footer(text=config.BOT_NAME)
         await interaction.response.send_message(embed=embed, ephemeral=True)
-
         await interaction.message.edit(view=self)
+
+    def mark_ended(self, decision_text: str, accent: int):
+        self._build(ended=True, decision_text=decision_text, accent=accent)
 
 
 class Giveaway(commands.Cog):
@@ -88,7 +126,9 @@ class Giveaway(commands.Cog):
         prize="اسم الجائزة",
         duration="المدة، مثال: 30s / 10m / 2h / 1d / 1h30m",
         winners="عدد الفائزين",
-        channel="الروم (اختياري)"
+        channel="الروم (اختياري)",
+        banner_url="رابط صورة بانر (اختياري)",
+        footer_text="رسالة تبان جنب الزر (اختياري)"
     )
     @app_commands.default_permissions(administrator=True)
     async def giveaway_start(
@@ -97,7 +137,9 @@ class Giveaway(commands.Cog):
         prize: str,
         duration: str,
         winners: int = 1,
-        channel: discord.TextChannel = None
+        channel: discord.TextChannel = None,
+        banner_url: str = None,
+        footer_text: str = None,
     ):
         try:
             duration_seconds = parse_duration(duration)
@@ -116,24 +158,17 @@ class Giveaway(commands.Cog):
             channel = interaction.channel
 
         end_time = datetime.now() + timedelta(seconds=duration_seconds)
+        giveaway_id = int(datetime.now().timestamp() * 1000)
 
-        embed = discord.Embed(
-            title="سحب جديد",
-            description=f"""
-## {prize}
-
-**عدد الفائزين:** {winners}
-**ينتهي:** <t:{int(end_time.timestamp())}:R> (<t:{int(end_time.timestamp())}:F>)
-**المشاركون:** 0
-
-اضغط على الزر أدناه للمشاركة.
-""",
-            color=config.EMBED_COLOR
+        view = GiveawayCardView(
+            giveaway_id=giveaway_id,
+            prize=prize,
+            end_time=end_time,
+            winners_count=winners,
+            banner_url=banner_url,
+            footer_text=footer_text,
         )
-        embed.set_footer(text=config.BOT_NAME)
-
-        view = GiveawayView(end_time, prize, winners)
-        message = await channel.send(embed=embed, view=view)
+        message = await channel.send(view=view)
 
         self.active_giveaways[message.id] = {
             'prize': prize,
@@ -170,38 +205,18 @@ class Giveaway(commands.Cog):
         participants = list(view.participants)
 
         if len(participants) < giveaway['winners']:
-            embed = discord.Embed(
-                title="انتهى السحب",
-                description=f"""
-**الجائزة:** {giveaway['prize']}
-
-عدد المشاركين غير كافي.
-""",
-                color=config.ERROR_COLOR
-            )
-            embed.set_footer(text=config.BOT_NAME)
-            await message.edit(embed=embed, view=None)
+            view.mark_ended("عدد المشاركين غير كافي.", accent=config.ERROR_COLOR)
+            await message.edit(view=view)
             del self.active_giveaways[message_id]
             return
 
         winners_ids = random.sample(participants, min(giveaway['winners'], len(participants)))
         winners_mentions = [f"<@{w}>" for w in winners_ids]
 
-        embed = discord.Embed(
-            title="انتهى السحب",
-            description=f"""
-**الجائزة:** {giveaway['prize']}
+        decision_text = f"**الفائزون :**\n{chr(10).join(winners_mentions)}\n\nمبروك للفائزين!"
+        view.mark_ended(decision_text, accent=config.SUCCESS_COLOR)
+        await message.edit(view=view)
 
-**الفائزون:**
-{chr(10).join(winners_mentions)}
-
-مبروك للفائزين!
-""",
-            color=config.SUCCESS_COLOR
-        )
-        embed.set_footer(text=config.BOT_NAME)
-
-        await message.edit(embed=embed, view=None)
         await channel.send(
             f"مبروك! {', '.join(winners_mentions)}\n"
             f"فزتوا بـ **{giveaway['prize']}**!"
@@ -214,7 +229,7 @@ class Giveaway(commands.Cog):
     @app_commands.default_permissions(administrator=True)
     async def giveaway_reroll(self, interaction: discord.Interaction, message_id: str):
         try:
-            message = await interaction.channel.fetch_message(int(message_id))
+            await interaction.channel.fetch_message(int(message_id))
         except Exception:
             await interaction.response.send_message("لم يتم العثور على الرسالة.", ephemeral=True)
             return
@@ -225,13 +240,7 @@ class Giveaway(commands.Cog):
             return
 
         new_winner = random.choice(members)
-        embed = discord.Embed(
-            title="إعادة سحب",
-            description=f"الفائز الجديد: {new_winner.mention}",
-            color=config.EMBED_COLOR
-        )
-        embed.set_footer(text=config.BOT_NAME)
-        await interaction.response.send_message(embed=embed)
+        await interaction.response.send_message(f"🔄 الفائز الجديد: {new_winner.mention}")
 
 
 async def setup(bot):
