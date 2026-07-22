@@ -27,8 +27,9 @@ def save_tickets(data: dict):
 
 
 # Per-ticket activity tracking, keyed by channel id — powers the 5h inactivity
-# warning + auto-close below. Kept separate from TICKET_COLLECTION (which is
-# per-guild config) since this is per-ticket and gets touched much more often.
+# warning + auto-close below, AND (once claimed) who's allowed to close the
+# ticket. Kept separate from TICKET_COLLECTION (which is per-guild config)
+# since this is per-ticket and gets touched much more often.
 def load_activity() -> dict:
     return db.load(ACTIVITY_COLLECTION)
 
@@ -50,6 +51,29 @@ def _is_support_staff(member: discord.Member, cfg: dict) -> bool:
     if support_role_id:
         return any(role.id == support_role_id for role in member.roles)
     return False
+
+
+def _get_claimed_by(channel_id: int) -> int | None:
+    activity = load_activity()
+    rec = activity.get(str(channel_id))
+    return rec.get("claimed_by") if rec else None
+
+
+def _can_close_ticket(member: discord.Member, channel: discord.TextChannel, cfg: dict) -> bool:
+    """Who's allowed to close a ticket:
+    - Always: the ticket owner (channel.topic == their id).
+    - Unclaimed ticket: any support staff (old behavior).
+    - Claimed ticket: ONLY the staff member who claimed it (support staff who
+      didn't claim it can no longer close someone else's claimed ticket)."""
+    is_owner = channel.topic == str(member.id)
+    if is_owner:
+        return True
+
+    claimed_by = _get_claimed_by(channel.id)
+    if claimed_by:
+        return member.id == claimed_by
+
+    return _is_support_staff(member, cfg)
 
 
 BUTTON_DEFAULTS = {
@@ -193,6 +217,7 @@ async def _create_ticket(interaction: discord.Interaction, problem_text: str):
         "last_reply_at": None,
         "warned": False,
         "warned_at": None,
+        "claimed_by": None,
     }
     save_activity(activity)
 
@@ -236,9 +261,38 @@ class TicketControlView(discord.ui.View):
             await interaction.response.send_message("❌ Only support staff can claim tickets.", ephemeral=True)
             return
 
+        activity = load_activity()
+        ch_key = str(interaction.channel_id)
+        rec = activity.get(ch_key)
+        if rec and rec.get("claimed_by") and rec["claimed_by"] != interaction.user.id:
+            claimer = interaction.guild.get_member(rec["claimed_by"])
+            await interaction.response.send_message(
+                f"❌ Already claimed by {claimer.mention if claimer else 'another staff member'}.", ephemeral=True
+            )
+            return
+
+        # Lock the ticket to this claimer — from now on only they (or the
+        # ticket owner) can close it. Build the record if one doesn't exist
+        # yet (e.g. ticket created before this tracking existed).
+        if not rec:
+            rec = {
+                "guild_id": interaction.guild_id,
+                "owner_id": int(interaction.channel.topic) if interaction.channel.topic and interaction.channel.topic.isdigit() else None,
+                "opened_at": datetime.now().timestamp(),
+                "last_reply_at": None,
+                "warned": False,
+                "warned_at": None,
+            }
+        rec["claimed_by"] = interaction.user.id
+        activity[ch_key] = rec
+        save_activity(activity)
+
         embed = discord.Embed(
             title="📋 Ticket Claimed",
-            description=f"This ticket has been claimed by {interaction.user.mention}.",
+            description=(
+                f"This ticket has been claimed by {interaction.user.mention}.\n"
+                f"🔒 Only {interaction.user.mention} or the ticket owner can close it from now on."
+            ),
             color=config.SUCCESS_COLOR,
             timestamp=datetime.now()
         )
@@ -252,6 +306,20 @@ class TicketControlView(discord.ui.View):
 
     @discord.ui.button(label="Close", emoji="🔒", style=discord.ButtonStyle.danger, custom_id="ticket_close_btn")
     async def close(self, interaction: discord.Interaction, button: discord.ui.Button):
+        ts = load_tickets()
+        cfg = ts.get(str(interaction.guild_id), {})
+        if not _can_close_ticket(interaction.user, interaction.channel, cfg):
+            claimed_by = _get_claimed_by(interaction.channel_id)
+            if claimed_by:
+                claimer = interaction.guild.get_member(claimed_by)
+                await interaction.response.send_message(
+                    f"❌ This ticket is claimed by {claimer.mention if claimer else 'another staff member'} — "
+                    f"only they or the ticket owner can close it.", ephemeral=True
+                )
+            else:
+                await interaction.response.send_message("❌ Only support staff or the ticket owner can close this.", ephemeral=True)
+            return
+
         await interaction.response.send_message(
             embed=discord.Embed(
                 title="🔒 Closing Ticket",
@@ -267,11 +335,14 @@ class TicketControlView(discord.ui.View):
         ts = load_tickets()
         cfg = ts.get(str(interaction.guild_id), {})
         support_role = interaction.guild.get_role(cfg.get("support_role_id") or 0)
+        claimed_by = _get_claimed_by(interaction.channel_id)
+        claimer = interaction.guild.get_member(claimed_by) if claimed_by else None
 
         embed = discord.Embed(
             title="🛠️ Support Panel",
             description=(
-                f"{'👥 Support role: ' + support_role.mention if support_role else '⚠️ No support role configured.'}\n\n"
+                f"{'👥 Support role: ' + support_role.mention if support_role else '⚠️ No support role configured.'}\n"
+                f"{'🔒 Claimed by: ' + claimer.mention if claimer else '🔓 Not claimed yet.'}\n\n"
                 "**Available commands in this ticket:**\n"
                 "`/ticket-add` — add another member to this ticket\n"
                 "`/ticket-close` — close this ticket"
@@ -608,9 +679,16 @@ class Tickets(commands.Cog):
             return
         ts = load_tickets()
         cfg = ts.get(str(interaction.guild_id), {})
-        is_owner = interaction.channel.topic == str(interaction.user.id)
-        if not (_is_support_staff(interaction.user, cfg) or is_owner):
-            await interaction.response.send_message("❌ Only the ticket owner or support staff can close this.", ephemeral=True)
+        if not _can_close_ticket(interaction.user, interaction.channel, cfg):
+            claimed_by = _get_claimed_by(interaction.channel_id)
+            if claimed_by:
+                claimer = interaction.guild.get_member(claimed_by)
+                await interaction.response.send_message(
+                    f"❌ This ticket is claimed by {claimer.mention if claimer else 'another staff member'} — "
+                    f"only they or the ticket owner can close it.", ephemeral=True
+                )
+            else:
+                await interaction.response.send_message("❌ Only the ticket owner or support staff can close this.", ephemeral=True)
             return
         embed = discord.Embed(
             title="🔒 Closing Ticket",
