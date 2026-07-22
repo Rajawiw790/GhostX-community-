@@ -61,7 +61,7 @@ class GiveawayCardView(discord.ui.LayoutView):
     def _build(self, *, ended: bool = False, decision_text: str = None, accent: int = None):
         self.clear_items()
 
-        header = f"# 🎉 {self.prize}"
+        header = f"# {self.prize}"
         details = (
             f"**Winners :** {self.winners_count}\n"
             f"**Ends :** <t:{int(self.end_time.timestamp())}:R> (<t:{int(self.end_time.timestamp())}:F>)\n"
@@ -82,7 +82,7 @@ class GiveawayCardView(discord.ui.LayoutView):
         else:
             btn = discord.ui.Button(
                 label=f"Enter Giveaway ({len(self.participants)})",
-                emoji="🎉",
+                emoji="🎁",
                 style=discord.ButtonStyle.primary,
                 custom_id=f"giveaway_enter_{self.giveaway_id}",
             )
