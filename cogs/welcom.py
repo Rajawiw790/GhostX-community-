@@ -212,7 +212,7 @@ class Welcome(commands.Cog):
         embed.set_thumbnail(url=interaction.user.display_avatar.url)
         if banner_url:
             embed.set_image(url=banner_url)
-        embed.set_footer(text=f"{config.BOT_NAME} | Dev: {config.DEVELOPER}", icon_url=self.bot.user.display_avatar.url)
+        embed.set_footer(text=f"{config.BOT_NAME}, icon_url=self.bot.user.display_avatar.url)
 
         await channel.send(content=f"🧪 {interaction.user.mention}", embed=embed)
         await interaction.followup.send("✅ Preview sent!", ephemeral=True)
