@@ -13,7 +13,7 @@ import requests
 from io import BytesIO
 import asyncio
 from datetime import datetime
-import db.
+import db
 
 WELCOME_COLLECTION = "welcome_settings"
 
