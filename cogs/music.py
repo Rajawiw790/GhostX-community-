@@ -12,6 +12,7 @@ Music System — Ghostx Community
 /loop   — Toggle loop mode
 /join   — Join your voice channel
 /leave  — Leave voice channel
+/panel  — 🎛️ Open a full interactive control panel (buttons)
 
 Runs on Lavalink via the `wavelink` client (see LAVALINK_SETUP.md for setup —
 LAVALINK_HOST / LAVALINK_PORT / LAVALINK_PASSWORD / LAVALINK_SECURE in
@@ -56,6 +57,8 @@ class GuildQueue:
         self.volume: int = 100
         self.skip_requested: bool = False
         self.text_channel: discord.TextChannel | None = None
+        # Live control-panel message, kept in sync on every track change
+        self.panel_message: discord.Message | None = None
 
 
 _queues: dict[int, GuildQueue] = {}
@@ -65,6 +68,118 @@ def get_queue(guild_id: int) -> GuildQueue:
     if guild_id not in _queues:
         _queues[guild_id] = GuildQueue()
     return _queues[guild_id]
+
+
+# ── Control Panel (persistent view — works across bot restarts) ────────────
+
+class MusicControlView(discord.ui.View):
+    def __init__(self, cog: "Music"):
+        super().__init__(timeout=None)
+        self.cog = cog
+
+    async def _refresh_message(self, interaction: discord.Interaction):
+        gq = get_queue(interaction.guild.id)
+        embed = self.cog._panel_embed(gq)
+        try:
+            await interaction.message.edit(embed=embed, view=self)
+        except Exception:
+            pass
+
+    @discord.ui.button(emoji="⏯️", style=discord.ButtonStyle.primary, custom_id="music_panel_pauseresume")
+    async def pause_resume(self, interaction: discord.Interaction, button: discord.ui.Button):
+        player: wavelink.Player = interaction.guild.voice_client
+        if not player or not player.playing:
+            await interaction.response.send_message("❌ لا توجد أغنية تشتغل!", ephemeral=True)
+            return
+        await player.pause(not player.paused)
+        await interaction.response.defer()
+        await self._refresh_message(interaction)
+
+    @discord.ui.button(emoji="⏭️", style=discord.ButtonStyle.secondary, custom_id="music_panel_skip")
+    async def skip_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        player: wavelink.Player = interaction.guild.voice_client
+        gq = get_queue(interaction.guild.id)
+        if not player or not gq.current:
+            await interaction.response.send_message("❌ لا توجد أغنية تشتغل!", ephemeral=True)
+            return
+        gq.skip_requested = True
+        await player.stop()  # triggers on_wavelink_track_end -> advances queue
+        await interaction.response.defer()
+
+    @discord.ui.button(emoji="⏹️", style=discord.ButtonStyle.danger, custom_id="music_panel_stop")
+    async def stop_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        player: wavelink.Player = interaction.guild.voice_client
+        gq = get_queue(interaction.guild.id)
+        gq.queue.clear()
+        gq.current = None
+        gq.loop = False
+        if player and player.playing:
+            await player.stop()
+        await interaction.response.defer()
+        await self._refresh_message(interaction)
+
+    @discord.ui.button(emoji="🔁", style=discord.ButtonStyle.secondary, custom_id="music_panel_loop")
+    async def loop_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        gq = get_queue(interaction.guild.id)
+        gq.loop = not gq.loop
+        await interaction.response.defer()
+        await self._refresh_message(interaction)
+
+    @discord.ui.button(emoji="🔉", style=discord.ButtonStyle.secondary, custom_id="music_panel_voldown")
+    async def vol_down(self, interaction: discord.Interaction, button: discord.ui.Button):
+        player: wavelink.Player = interaction.guild.voice_client
+        gq = get_queue(interaction.guild.id)
+        gq.volume = max(0, gq.volume - 10)
+        if player and player.connected:
+            await player.set_volume(gq.volume)
+        await interaction.response.defer()
+        await self._refresh_message(interaction)
+
+    @discord.ui.button(emoji="🔊", style=discord.ButtonStyle.secondary, custom_id="music_panel_volup")
+    async def vol_up(self, interaction: discord.Interaction, button: discord.ui.Button):
+        player: wavelink.Player = interaction.guild.voice_client
+        gq = get_queue(interaction.guild.id)
+        gq.volume = min(100, gq.volume + 10)
+        if player and player.connected:
+            await player.set_volume(gq.volume)
+        await interaction.response.defer()
+        await self._refresh_message(interaction)
+
+    @discord.ui.button(emoji="📋", style=discord.ButtonStyle.secondary, custom_id="music_panel_queuelist", row=1)
+    async def queue_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        gq = get_queue(interaction.guild.id)
+        if not gq.queue:
+            await interaction.response.send_message("📋 القائمة فارغة حاليا.", ephemeral=True)
+            return
+        lines = []
+        for i, item in enumerate(list(gq.queue)[:15], 1):
+            t = item.track
+            lines.append(f"`{i}.` **{t.title}** `{_fmt(t.length)}`")
+        if len(gq.queue) > 15:
+            lines.append(f"*...و {len(gq.queue) - 15} أخرى*")
+        embed = discord.Embed(title="📋 القائمة الكاملة", description="\n".join(lines), color=config.EMBED_COLOR)
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    @discord.ui.button(emoji="👋", style=discord.ButtonStyle.danger, custom_id="music_panel_leave", row=1)
+    async def leave_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
+        player: wavelink.Player = interaction.guild.voice_client
+        gq = get_queue(interaction.guild.id)
+        if not player:
+            await interaction.response.send_message("❌ البوت مش في روم صوتي!", ephemeral=True)
+            return
+        gq.queue.clear()
+        gq.current = None
+        gq.loop = False
+        gq.panel_message = None
+        await player.disconnect()
+        await interaction.response.defer()
+        try:
+            await interaction.message.edit(
+                embed=discord.Embed(description="📤 تم الخروج وإيقاف الموسيقى.", color=config.ERROR_COLOR),
+                view=None,
+            )
+        except Exception:
+            pass
 
 
 # ── Music Cog ────────────────────────────────────────────────────────────────
@@ -136,6 +251,48 @@ class Music(commands.Cog):
         embed.set_footer(text=f"{'طلبه: ' + requester + ' | ' if requester else ''}Dev: {config.DEVELOPER}")
         return embed
 
+    def _panel_embed(self, gq: GuildQueue) -> discord.Embed:
+        if gq.current:
+            t = gq.current.track
+            embed = discord.Embed(
+                title="🎛️ لوحة تحكم الموسيقى",
+                description=f"**يشتغل الآن:**\n**[{t.title}]({t.uri or ''})**",
+                color=config.SUCCESS_COLOR,
+            )
+            embed.add_field(name="⏱️ المدة", value=_fmt(t.length), inline=True)
+            if t.artwork:
+                embed.set_thumbnail(url=t.artwork)
+        else:
+            embed = discord.Embed(
+                title="🎛️ لوحة تحكم الموسيقى",
+                description="`لا توجد أغنية تشتغل حاليا`",
+                color=config.EMBED_COLOR,
+            )
+
+        embed.add_field(name="🔊 الصوت", value=f"{gq.volume}%", inline=True)
+        embed.add_field(name="🔁 Loop", value="✅" if gq.loop else "❌", inline=True)
+
+        if gq.queue:
+            lines = []
+            for i, item in enumerate(list(gq.queue)[:5], 1):
+                t2 = item.track
+                lines.append(f"`{i}.` {t2.title}")
+            if len(gq.queue) > 5:
+                lines.append(f"*...و {len(gq.queue) - 5} أخرى*")
+            embed.add_field(name=f"📋 القائمة ({len(gq.queue)})", value="\n".join(lines), inline=False)
+        else:
+            embed.add_field(name="📋 القائمة", value="`فارغة`", inline=False)
+
+        embed.set_footer(text=f"{config.BOT_NAME} | Dev: {config.DEVELOPER}")
+        return embed
+
+    async def _refresh_panel(self, gq: GuildQueue):
+        if gq.panel_message:
+            try:
+                await gq.panel_message.edit(embed=self._panel_embed(gq))
+            except Exception:
+                pass
+
     # ── Lavalink events ──────────────────────────────────────────────────────
 
     @commands.Cog.listener()
@@ -151,6 +308,7 @@ class Music(commands.Cog):
                 await gq.text_channel.send(embed=self._now_playing_embed(gq))
             except Exception:
                 pass
+        await self._refresh_panel(gq)
 
     @commands.Cog.listener()
     async def on_wavelink_node_ready(self, payload: "wavelink.NodeReadyEventPayload"):
@@ -184,6 +342,7 @@ class Music(commands.Cog):
             gq.queue.clear()
             gq.current = None
             gq.loop = False
+            gq.panel_message = None
             await player.disconnect()
             await interaction.response.send_message(
                 embed=discord.Embed(description="📤 تم الخروج وإيقاف الموسيقى.", color=config.EMBED_COLOR)
@@ -262,6 +421,7 @@ class Music(commands.Cog):
             embed.set_footer(text=f"طلبه: {interaction.user} | Dev: {config.DEVELOPER}")
 
         await interaction.followup.send(embed=embed)
+        await self._refresh_panel(gq)
 
     # ── /skip ────────────────────────────────────────────────────────────────
 
@@ -276,7 +436,10 @@ class Music(commands.Cog):
             )
             return
         gq.skip_requested = True
-        await player.skip()
+        # NOTE: wavelink.Player has no `.skip()` method — this was the bug.
+        # Stopping the current track fires on_wavelink_track_end, which
+        # advances the queue for us.
+        await player.stop()
         await interaction.response.send_message(
             embed=discord.Embed(description="⏭️ تم تخطي الأغنية.", color=config.SUCCESS_COLOR)
         )
@@ -297,6 +460,7 @@ class Music(commands.Cog):
             color=config.ERROR_COLOR,
         )
         await interaction.response.send_message(embed=embed)
+        await self._refresh_panel(gq)
 
     # ── /pause ───────────────────────────────────────────────────────────────
 
@@ -308,6 +472,7 @@ class Music(commands.Cog):
             await interaction.response.send_message(
                 embed=discord.Embed(description="⏸️ تم الإيقاف المؤقت.", color=config.WARNING_COLOR)
             )
+            await self._refresh_panel(get_queue(interaction.guild.id))
         else:
             await interaction.response.send_message(
                 embed=discord.Embed(description="❌ لا توجد أغنية تشتغل!", color=config.ERROR_COLOR),
@@ -324,6 +489,7 @@ class Music(commands.Cog):
             await interaction.response.send_message(
                 embed=discord.Embed(description="▶️ تم استئناف الموسيقى.", color=config.SUCCESS_COLOR)
             )
+            await self._refresh_panel(get_queue(interaction.guild.id))
         else:
             await interaction.response.send_message(
                 embed=discord.Embed(description="❌ الموسيقى مش متوقفة!", color=config.ERROR_COLOR),
@@ -400,6 +566,7 @@ class Music(commands.Cog):
             color=config.SUCCESS_COLOR,
         )
         await interaction.response.send_message(embed=embed)
+        await self._refresh_panel(gq)
 
     # ── /loop ─────────────────────────────────────────────────────────────────
 
@@ -413,7 +580,21 @@ class Music(commands.Cog):
             color=config.SUCCESS_COLOR if gq.loop else config.ERROR_COLOR,
         )
         await interaction.response.send_message(embed=embed)
+        await self._refresh_panel(gq)
+
+    # ── /panel ────────────────────────────────────────────────────────────────
+
+    @app_commands.command(name="panel", description="🎛️ فتح لوحة تحكم كاملة للموسيقى (أزرار)")
+    async def panel(self, interaction: discord.Interaction):
+        gq = get_queue(interaction.guild.id)
+        embed = self._panel_embed(gq)
+        view = MusicControlView(self)
+        await interaction.response.send_message(embed=embed, view=view)
+        gq.panel_message = await interaction.original_response()
 
 
 async def setup(bot: commands.Bot):
-    await bot.add_cog(Music(bot))
+    cog = Music(bot)
+    await bot.add_cog(cog)
+    # Register the view as persistent so buttons keep working after a restart
+    bot.add_view(MusicControlView(cog))
