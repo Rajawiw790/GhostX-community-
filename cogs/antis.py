@@ -1,14 +1,22 @@
 """
 Protection System — Ghostx Community
 Anti-Spam / Anti-Link / Anti-Bot in one cog.
+
+Escalation system for Anti-Spam & Anti-Link:
+  - Violation #1 & #2 -> temporary mute (timeout)
+  - Violation #3      -> kick (and warning counter resets)
+Anti-Bot stays immediate kick/ban (no repeated-offense concept for bot joins).
 """
 
 import re
 import time
+from datetime import timedelta
+from collections import defaultdict
+
 import discord
 from discord.ext import commands
 from discord import app_commands
-from collections import defaultdict
+
 import config
 import db
 
@@ -20,24 +28,24 @@ INVITE_REGEX = re.compile(r"(discord\.gg/\S+|discord(?:app)?\.com/invite/\S+)", 
 DEFAULT_CFG = {
     "antispam": {
         "enabled": False,
-        "limit": 5,          # messages
-        "interval": 5,       # seconds
-        "action": "timeout", # "timeout" | "kick" | "ban" | "delete_only"
-        "duration": 60,      # timeout duration in seconds
+        "limit": 5,             # messages
+        "interval": 5,          # seconds
+        "mute_duration": 300,   # timeout duration per warning (seconds)
+        "max_warnings": 3,      # warnings before kick
         "whitelist_roles": [],
         "whitelist_channels": [],
     },
     "antilink": {
         "enabled": False,
-        "action": "delete",  # "delete" | "timeout" | "kick" | "ban"
-        "duration": 60,
+        "mute_duration": 300,
+        "max_warnings": 3,
         "allow_invites": False,
         "whitelist_roles": [],
         "whitelist_channels": [],
     },
     "antibot": {
         "enabled": False,
-        "action": "kick",    # "kick" | "ban"
+        "action": "kick",       # "kick" | "ban"
         "whitelist_ids": [],
     },
     "log_channel_id": None,
@@ -68,11 +76,18 @@ class Protection(commands.Cog):
         description="🤖 Manage the anti-bot system",
         default_permissions=discord.Permissions(administrator=True),
     )
+    warnings_group = app_commands.Group(
+        name="warnings",
+        description="⚠️ Manage user protection warnings",
+        default_permissions=discord.Permissions(administrator=True),
+    )
 
     def __init__(self, bot):
         self.bot = bot
-        # (guild_id, user_id) -> list[timestamps]
+        # (guild_id, user_id) -> list[timestamps]  (for spam-rate detection)
         self.spam_cache = defaultdict(list)
+        # (guild_id, user_id) -> {"antispam": n, "antilink": n}  (escalation counters)
+        self.warnings = defaultdict(lambda: defaultdict(int))
 
     # ─── helpers ─────────────────────────────────────────────────────────────
     def _get_guild_cfg(self, guild_id: int) -> dict:
@@ -115,16 +130,41 @@ class Protection(commands.Cog):
             return True
         return False
 
-    async def _punish(self, member: discord.Member, action: str, duration: int, reason: str):
-        try:
-            if action == "timeout":
-                await member.timeout(discord.utils.utcnow() + discord.timedelta(seconds=duration), reason=reason)
-            elif action == "kick":
-                await member.kick(reason=reason)
-            elif action == "ban":
-                await member.ban(reason=reason, delete_message_seconds=0)
-        except Exception as e:
-            print(f"[Protection] Punish error: {e}")
+    async def _handle_violation(
+        self,
+        member: discord.Member,
+        rule_type: str,       # "antispam" | "antilink"
+        sub_cfg: dict,
+        reason: str,
+    ):
+        """
+        Escalating punishment:
+          count < max_warnings -> temporary mute (timeout)
+          count >= max_warnings -> kick, counter resets to 0
+        Returns (action_taken, count, max_warnings)
+        """
+        key = (member.guild.id, member.id)
+        self.warnings[key][rule_type] += 1
+        count = self.warnings[key][rule_type]
+        max_warnings = sub_cfg.get("max_warnings", 3)
+        mute_duration = sub_cfg.get("mute_duration", 300)
+
+        if count >= max_warnings:
+            try:
+                await member.kick(reason=f"{reason} — تجاوز {max_warnings} تحذيرات")
+            except Exception as e:
+                print(f"[Protection] Kick error: {e}")
+            self.warnings[key][rule_type] = 0
+            return "kick", count, max_warnings
+        else:
+            try:
+                await member.timeout(
+                    discord.utils.utcnow() + timedelta(seconds=mute_duration),
+                    reason=reason,
+                )
+            except Exception as e:
+                print(f"[Protection] Timeout error: {e}")
+            return "mute", count, max_warnings
 
     # ─── on_message: anti-spam + anti-link ──────────────────────────────────
     @commands.Cog.listener()
@@ -141,33 +181,42 @@ class Protection(commands.Cog):
         if link_cfg.get("enabled") and not self._is_whitelisted(message.author, link_cfg, message.channel.id):
             has_invite = bool(INVITE_REGEX.search(message.content))
             has_link = bool(LINK_REGEX.search(message.content))
-            blocked = has_link and not (has_invite is False and link_cfg.get("allow_invites") and not has_invite)
-            if has_invite and link_cfg.get("allow_invites"):
-                blocked = has_link and not has_invite  # invites allowed, but block other links
-            elif has_link:
-                blocked = True
+
+            if link_cfg.get("allow_invites"):
+                blocked = has_link and not has_invite
             else:
-                blocked = False
+                blocked = has_link
 
             if blocked:
                 try:
                     await message.delete()
                 except Exception:
                     pass
+
+                action, count, max_warnings = await self._handle_violation(
+                    message.author, "antilink", link_cfg, "Anti-Link: posted a link"
+                )
+
                 try:
-                    warn = await message.channel.send(
-                        f"🔗 {message.author.mention} الروابط ممنوعة فهاد السيرفر!", delete_after=5
-                    )
+                    if action == "kick":
+                        warn_txt = f"🔗 {message.author.mention} تّطرد من السيرفر (تجاوز {max_warnings} تحذيرات ديال الروابط)."
+                    else:
+                        warn_txt = (
+                            f"🔗 {message.author.mention} الروابط ممنوعة! "
+                            f"تحذير {count}/{max_warnings} — تّبنّن مؤقتا."
+                        )
+                    await message.channel.send(warn_txt, delete_after=8)
                 except Exception:
                     pass
 
-                action = link_cfg.get("action", "delete")
-                if action != "delete":
-                    await self._punish(message.author, action, link_cfg.get("duration", 60), "Anti-Link: posted a link")
-
                 embed = discord.Embed(
                     title="🔗 Anti-Link Triggered",
-                    description=f"**User:** {message.author.mention}\n**Channel:** {message.channel.mention}\n**Action:** `{action}`",
+                    description=(
+                        f"**User:** {message.author.mention}\n"
+                        f"**Channel:** {message.channel.mention}\n"
+                        f"**Warning:** {count}/{max_warnings}\n"
+                        f"**Action:** `{action}`"
+                    ),
                     color=config.ERROR_COLOR,
                 )
                 await self._log(message.guild, gcfg, embed)
@@ -191,20 +240,30 @@ class Protection(commands.Cog):
                 except Exception:
                     pass
 
-                action = spam_cfg.get("action", "timeout")
-                if action != "delete_only":
-                    await self._punish(message.author, action, spam_cfg.get("duration", 60), "Anti-Spam: message flood")
+                action, count, max_warnings = await self._handle_violation(
+                    message.author, "antispam", spam_cfg, "Anti-Spam: message flood"
+                )
 
                 try:
-                    warn = await message.channel.send(
-                        f"🚫 {message.author.mention} تسالا! خصك توقف على الفلود.", delete_after=5
-                    )
+                    if action == "kick":
+                        warn_txt = f"🚫 {message.author.mention} تّطرد من السيرفر (تجاوز {max_warnings} تحذيرات ديال الفلود)."
+                    else:
+                        warn_txt = (
+                            f"🚫 {message.author.mention} تسالا! "
+                            f"تحذير {count}/{max_warnings} — تّبنّن مؤقتا."
+                        )
+                    await message.channel.send(warn_txt, delete_after=8)
                 except Exception:
                     pass
 
                 embed = discord.Embed(
                     title="🚫 Anti-Spam Triggered",
-                    description=f"**User:** {message.author.mention}\n**Channel:** {message.channel.mention}\n**Action:** `{action}`",
+                    description=(
+                        f"**User:** {message.author.mention}\n"
+                        f"**Channel:** {message.channel.mention}\n"
+                        f"**Warning:** {count}/{max_warnings}\n"
+                        f"**Action:** `{action}`"
+                    ),
                     color=config.ERROR_COLOR,
                 )
                 await self._log(message.guild, gcfg, embed)
@@ -254,32 +313,26 @@ class Protection(commands.Cog):
         self._save_guild_cfg(interaction.guild_id, gcfg)
         await interaction.response.send_message("❌ Anti-Spam متوقف دابا.", ephemeral=True)
 
-    @antispam_group.command(name="config", description="⚙️ Configure anti-spam thresholds")
+    @antispam_group.command(name="config", description="⚙️ Configure anti-spam thresholds & escalation")
     @app_commands.describe(
         limit="Max messages allowed within the interval (default 5)",
         interval="Time window in seconds (default 5)",
-        action="Punishment when triggered",
-        duration="Timeout duration in seconds (if action=timeout)",
+        mute_duration="Timeout duration per warning, in seconds (default 300)",
+        max_warnings="How many warnings before a kick (default 3)",
     )
-    @app_commands.choices(action=[
-        app_commands.Choice(name="Timeout", value="timeout"),
-        app_commands.Choice(name="Kick", value="kick"),
-        app_commands.Choice(name="Ban", value="ban"),
-        app_commands.Choice(name="Delete only", value="delete_only"),
-    ])
     async def antispam_config(
         self,
         interaction: discord.Interaction,
         limit: int = None,
         interval: int = None,
-        action: app_commands.Choice[str] = None,
-        duration: int = None,
+        mute_duration: int = None,
+        max_warnings: int = None,
     ):
         gcfg = self._get_guild_cfg(interaction.guild_id)
-        if limit is not None:    gcfg["antispam"]["limit"] = limit
-        if interval is not None: gcfg["antispam"]["interval"] = interval
-        if action is not None:   gcfg["antispam"]["action"] = action.value
-        if duration is not None: gcfg["antispam"]["duration"] = duration
+        if limit is not None:         gcfg["antispam"]["limit"] = limit
+        if interval is not None:      gcfg["antispam"]["interval"] = interval
+        if mute_duration is not None: gcfg["antispam"]["mute_duration"] = mute_duration
+        if max_warnings is not None:  gcfg["antispam"]["max_warnings"] = max_warnings
         self._save_guild_cfg(interaction.guild_id, gcfg)
         await interaction.response.send_message(
             embed=self._antispam_embed(gcfg["antispam"]), ephemeral=True
@@ -316,8 +369,8 @@ class Protection(commands.Cog):
         e = discord.Embed(title="🚫 Anti-Spam Settings", color=config.SUCCESS_COLOR)
         e.add_field(name="Status", value="✅ ON" if sub.get("enabled") else "❌ OFF", inline=True)
         e.add_field(name="Limit", value=f"{sub.get('limit')} msgs / {sub.get('interval')}s", inline=True)
-        e.add_field(name="Action", value=f"`{sub.get('action')}`", inline=True)
-        e.add_field(name="Duration", value=f"{sub.get('duration')}s", inline=True)
+        e.add_field(name="Mute Duration", value=f"{sub.get('mute_duration')}s", inline=True)
+        e.add_field(name="Max Warnings", value=f"{sub.get('max_warnings')} (then kick)", inline=True)
         e.add_field(name="Whitelisted Roles", value=str(len(sub.get("whitelist_roles", []))), inline=True)
         e.add_field(name="Whitelisted Channels", value=str(len(sub.get("whitelist_channels", []))), inline=True)
         return e
@@ -337,28 +390,22 @@ class Protection(commands.Cog):
         self._save_guild_cfg(interaction.guild_id, gcfg)
         await interaction.response.send_message("❌ Anti-Link متوقف دابا.", ephemeral=True)
 
-    @antilink_group.command(name="config", description="⚙️ Configure anti-link action")
+    @antilink_group.command(name="config", description="⚙️ Configure anti-link escalation")
     @app_commands.describe(
-        action="Punishment when triggered",
-        duration="Timeout duration in seconds (if action=timeout)",
+        mute_duration="Timeout duration per warning, in seconds (default 300)",
+        max_warnings="How many warnings before a kick (default 3)",
         allow_invites="Allow Discord server invite links",
     )
-    @app_commands.choices(action=[
-        app_commands.Choice(name="Delete only", value="delete"),
-        app_commands.Choice(name="Timeout", value="timeout"),
-        app_commands.Choice(name="Kick", value="kick"),
-        app_commands.Choice(name="Ban", value="ban"),
-    ])
     async def antilink_config(
         self,
         interaction: discord.Interaction,
-        action: app_commands.Choice[str] = None,
-        duration: int = None,
+        mute_duration: int = None,
+        max_warnings: int = None,
         allow_invites: bool = None,
     ):
         gcfg = self._get_guild_cfg(interaction.guild_id)
-        if action is not None:        gcfg["antilink"]["action"] = action.value
-        if duration is not None:      gcfg["antilink"]["duration"] = duration
+        if mute_duration is not None: gcfg["antilink"]["mute_duration"] = mute_duration
+        if max_warnings is not None:  gcfg["antilink"]["max_warnings"] = max_warnings
         if allow_invites is not None: gcfg["antilink"]["allow_invites"] = allow_invites
         self._save_guild_cfg(interaction.guild_id, gcfg)
         await interaction.response.send_message(embed=self._antilink_embed(gcfg["antilink"]), ephemeral=True)
@@ -393,8 +440,8 @@ class Protection(commands.Cog):
     def _antilink_embed(self, sub: dict) -> discord.Embed:
         e = discord.Embed(title="🔗 Anti-Link Settings", color=config.SUCCESS_COLOR)
         e.add_field(name="Status", value="✅ ON" if sub.get("enabled") else "❌ OFF", inline=True)
-        e.add_field(name="Action", value=f"`{sub.get('action')}`", inline=True)
-        e.add_field(name="Duration", value=f"{sub.get('duration')}s", inline=True)
+        e.add_field(name="Mute Duration", value=f"{sub.get('mute_duration')}s", inline=True)
+        e.add_field(name="Max Warnings", value=f"{sub.get('max_warnings')} (then kick)", inline=True)
         e.add_field(name="Allow Invites", value="✅" if sub.get("allow_invites") else "❌", inline=True)
         e.add_field(name="Whitelisted Roles", value=str(len(sub.get("whitelist_roles", []))), inline=True)
         e.add_field(name="Whitelisted Channels", value=str(len(sub.get("whitelist_channels", []))), inline=True)
@@ -440,4 +487,39 @@ class Protection(commands.Cog):
             lst.remove(bid)
         elif not remove and bid not in lst:
             lst.append(bid)
-        self._save_guild
+        self._save_guild_cfg(interaction.guild_id, gcfg)
+        action = "تنحات" if remove else "تزادت"
+        await interaction.response.send_message(f"✅ البوت `{bid}` {action} من اللائحة البيضاء.", ephemeral=True)
+
+    # ═══════════════════════════ /warnings ════════════════════════════════════
+    @warnings_group.command(name="check", description="🔍 Check a member's current spam/link warning count")
+    @app_commands.describe(member="The member to check")
+    async def warnings_check(self, interaction: discord.Interaction, member: discord.Member):
+        key = (interaction.guild_id, member.id)
+        w = self.warnings.get(key, {})
+        e = discord.Embed(title=f"⚠️ Warnings — {member.display_name}", color=config.SUCCESS_COLOR)
+        e.add_field(name="Anti-Spam", value=str(w.get("antispam", 0)), inline=True)
+        e.add_field(name="Anti-Link", value=str(w.get("antilink", 0)), inline=True)
+        await interaction.response.send_message(embed=e, ephemeral=True)
+
+    @warnings_group.command(name="reset", description="🔄 Reset a member's spam/link warnings")
+    @app_commands.describe(member="The member to reset")
+    async def warnings_reset(self, interaction: discord.Interaction, member: discord.Member):
+        key = (interaction.guild_id, member.id)
+        if key in self.warnings:
+            self.warnings[key] = defaultdict(int)
+        await interaction.response.send_message(f"✅ تم تصفير التحذيرات ديال {member.mention}.", ephemeral=True)
+
+    # ─── config command (shared log channel) ────────────────────────────────
+    @app_commands.command(name="protectionlog", description="📋 Set the log channel for protection events")
+    @app_commands.default_permissions(administrator=True)
+    @app_commands.describe(channel="Channel where protection logs will be sent")
+    async def protection_log(self, interaction: discord.Interaction, channel: discord.TextChannel):
+        gcfg = self._get_guild_cfg(interaction.guild_id)
+        gcfg["log_channel_id"] = channel.id
+        self._save_guild_cfg(interaction.guild_id, gcfg)
+        await interaction.response.send_message(f"✅ Log channel تبدل لـ {channel.mention}.", ephemeral=True)
+
+
+async def setup(bot):
+    await bot.add_cog(Protection(bot))
