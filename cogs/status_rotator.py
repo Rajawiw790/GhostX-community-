@@ -29,7 +29,7 @@ ACTIVITIES = [
     "eFootball Matches",
     "PUBG Rooms",
     "Developed in Python",
-    "print("Hello")",
+    "print('Hello')",
     "PUBG Mobile Tournaments",
     "Valorant Clutches",
     "Valorant Ranked",
