@@ -9,7 +9,6 @@ import asyncio
 import random
 import aiohttp
 from datetime import datetime
-from cogs import emoji_loader
 
 from dotenv import load_dotenv
 load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), '..', '.env'))
@@ -176,12 +175,18 @@ async def ping(interaction: discord.Interaction):
     await interaction.response.send_message(embed=embed)
 
 
+# ── Application Emojis used across the /help menu ───────────────────────
+# These are hardcoded <:name:id> mentions pulled straight from the bot's
+# Application Emojis (Developer Portal → Emojis tab), so they render in
+# any server the bot is in without needing a runtime lookup/cache layer
+# (no more cogs.emoji_loader for this menu). If an emoji is ever deleted
+# from the portal, just swap its ID here.
 HELP_SECTIONS = [
     {
         "key": "admin",
         "title": "Administration",
-        "emoji_name": "fl_admin",
-        "fallback": "🛡️",
+        "emoji": "<:40528administrateur:1530120051674320946>",
+        "description": "أوامر الإشراف: حظر، طرد، كتم، تحذير وإدارة الرتب",
         "value": (
             "› `/ban` `/kick` — طرد أو حذف عضو\n"
             "› `/mute` `/unmute` — كتم أو رفع الكتم\n"
@@ -195,8 +200,8 @@ HELP_SECTIONS = [
     {
         "key": "tickets",
         "title": "Tickets",
-        "emoji_name": "fl_ticket",
-        "fallback": "🎫",
+        "emoji": "<:29909ticket:1530120009961967636>",
+        "description": "نظام التذاكر الكامل: إعداد، تعديل وإدارة الطلبات",
         "value": (
             "› `/ticket setup` — تفعيل نظام التذاكر\n"
             "› `/ticket update` — تعديل الإعدادات\n"
@@ -208,8 +213,8 @@ HELP_SECTIONS = [
     {
         "key": "welcome",
         "title": "Welcome, Boost & Subscribe",
-        "emoji_name": "fl_home",
-        "fallback": "👋",
+        "emoji": "<:11757home:1530119888385871872>",
+        "description": "رسائل الترحيب، تفعيلات البوست والاشتراكات",
         "value": (
             "› `/welcome setup` `/welcome update` `/welcome remove`\n"
             "› `/welcome preview` `/welcome info`\n"
@@ -220,8 +225,8 @@ HELP_SECTIONS = [
     {
         "key": "applications",
         "title": "Applications",
-        "emoji_name": "fl_application",
-        "fallback": "📋",
+        "emoji": "<:32535applicationapprivedids:1530120012654968872>",
+        "description": "طلبات الانضمام لفريق الـ Staff أو الـ Whitelist",
         "value": (
             "› `/setup apply` — طلبات Staff / Whitelist\n"
             "› `/setup guide` — دليل إعداد البوت الكامل"
@@ -230,8 +235,8 @@ HELP_SECTIONS = [
     {
         "key": "music",
         "title": "Music",
-        "emoji_name": "fl_music",
-        "fallback": "🎵",
+        "emoji": "<:5356spotifymusicdisc:1530119807624679494>",
+        "description": "تشغيل وإدارة الموسيقى داخل الروم الصوتي",
         "value": (
             "› `/play` — تشغيل أو إضافة أغنية\n"
             "› `/skip` `/stop` — تخطي أو إيقاف\n"
@@ -244,8 +249,8 @@ HELP_SECTIONS = [
     {
         "key": "emojis",
         "title": "Emojis",
-        "emoji_name": "fl_emojis",
-        "fallback": "😀",
+        "emoji": "<:10043manface:1530119878168809632>",
+        "description": "نسخ وإدارة الإيموجيات من أي سيرفر لسيرفرك",
         "value": (
             "› `/emoji steal` — نسخ إيموجي واحد\n"
             "› `/emoji stealall` — نسخ كل إيموجيات سيرفر آخر\n"
@@ -256,8 +261,8 @@ HELP_SECTIONS = [
     {
         "key": "ai",
         "title": "AI",
-        "emoji_name": "fl_ai",
-        "fallback": "🤖",
+        "emoji": "<:95805bot:1530120267605737562>",
+        "description": "تحدث مباشرة مع الذكاء الاصطناعي داخل السيرفر",
         "value": (
             "› `/ai ask` — اسأل الـ AI أي سؤال\n"
             "› `/ai clear` — امسح سجل محادثتك"
@@ -266,8 +271,8 @@ HELP_SECTIONS = [
     {
         "key": "stats",
         "title": "Server Stats",
-        "emoji_name": "fl_stats",
-        "fallback": "📊",
+        "emoji": "<:41378statistiques:1530120054715453570>",
+        "description": "رومات إحصائيات حية تتحدث تلقائياً",
         "value": (
             "› `/serverstats setup` — إنشاء رومات إحصائيات حية\n"
             "› `/serverstats update` — تحديث فوري\n"
@@ -277,8 +282,8 @@ HELP_SECTIONS = [
     {
         "key": "general",
         "title": "General",
-        "emoji_name": "fl_star",
-        "fallback": "⭐",
+        "emoji": "<:9275yellowstar:1530119868903460955>",
+        "description": "أوامر عامة: البروفايل، الرصيد والرتب التلقائية",
         "value": (
             "› `/ping` `/help` `/time` `/report`\n"
             "› `/profile` `/random` `/top` `/daily` `/balance`\n"
@@ -289,15 +294,15 @@ HELP_SECTIONS = [
     {
         "key": "voice",
         "title": "Voice",
-        "emoji_name": "fl_voice",
-        "fallback": "🎙️",
+        "emoji": "<:15830voicechannelgreenalt:1530119939153989773>",
+        "description": "نظام الرومات الصوتية Join-to-Create",
         "value": "› `/voicepanel setup` — نظام Join-to-Create الصوتي",
     },
     {
         "key": "resources",
         "title": "Resources",
-        "emoji_name": "fl_resources",
-        "fallback": "📦",
+        "emoji": "<:90665shoppingcart:1530120251616792626>",
+        "description": "اقتراح ومراجعة الموارد: سكريبتات، بوتات وبلوگينات",
         "value": (
             "› `/resource submit` — اقترح مورد (سكريبت/بوت/بلوگين...)\n"
             "› `/resource list` `/resource search`\n"
@@ -308,8 +313,8 @@ HELP_SECTIONS = [
     {
         "key": "announcements",
         "title": "Announcements",
-        "emoji_name": "fl_announcement",
-        "fallback": "📢",
+        "emoji": "<:6619megaphone:1530119828747190373>",
+        "description": "إرسال إعلانات ورسائل خاصة لأعضاء رتبة معينة",
         "value": (
             "› `/say` — إرسال رسالة/embed باسم البوت، أو DM لرتبة\n"
             "› `/notify` — DM لكل أعضاء رتبة معينة"
@@ -318,37 +323,14 @@ HELP_SECTIONS = [
 ]
 
 
-def _section_emoji_obj(section: dict):
-    """Emoji object for use inside a SelectOption (emoji=...). Falls back
-    to the section's plain Unicode emoji if the custom Application Emoji
-    isn't loaded yet (or isn't mapped) — never returns something invalid,
-    since a bad emoji on ANY option breaks the whole select menu."""
-    name = section.get("emoji_name")
-    if name:
-        obj = emoji_loader.get_obj(name)
-        if obj:
-            return obj
-    return section["fallback"]
-
-
-def _section_emoji_str(section: dict) -> str:
-    """Emoji as printable text, for use inside a TextDisplay / markdown
-    body (e.g. '<:fl_home:123...>'). Falls back to the Unicode emoji."""
-    name = section.get("emoji_name")
-    if name:
-        text = emoji_loader.get(name)
-        if text:
-            return text
-    return section["fallback"]
-
-
 class HelpSelect(discord.ui.Select):
     def __init__(self, active_key: str | None = None):
         options = [
             discord.SelectOption(
                 label=section["title"],
                 value=section["key"],
-                emoji=_section_emoji_obj(section),
+                description=section["description"],
+                emoji=section["emoji"],
                 default=(section["key"] == active_key),
             )
             for section in HELP_SECTIONS
@@ -383,7 +365,7 @@ class HelpLayoutView(discord.ui.LayoutView):
         )
 
         if section:
-            body_text = f"**{_section_emoji_str(section)} {section['title']}**\n{section['value']}"
+            body_text = f"**{section['emoji']} {section['title']}**\n{section['value']}"
         else:
             body_text = "اختار قسم من المنيو تحت باش تشوف الأوامر ديالو 👇"
 
