@@ -1,1 +1,509 @@
-l
+"""
+Ticket System — Ghostx Community
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+- Numbered ticket channels (ticket-0001) instead of usernames
+- Multiple ticket types via a dropdown on the panel, each with its own
+  category, support role and intake question
+- Blacklist to block specific members from opening tickets
+- Claim / Transfer / Close, with claim-locking (only the claimer or the
+  ticket owner can close a claimed ticket)
+- 5h no-staff-reply warning -> 30 more min -> auto-close
+- Per-staff stats (claimed / closed)
+
+Commands:
+  /ticket setup                — panel channel + optional first ("General") type
+  /ticket update                — change panel-level fields only
+  /ticket remove                — disable the system for this server
+  /ticket customize             — button labels/emoji + instructions text
+  /ticket-type add/remove/list  — manage the dropdown's ticket types
+  /ticket-blacklist add/remove/list — block/unblock members from opening tickets
+  /ticket-add                   — add a member to the current ticket
+  /ticket-close                 — close the current ticket
+  /ticket-transfer              — hand a claimed ticket to another staff member
+  /ticket-stats                 — per-staff or team leaderboard
+"""
+
+import io
+import discord
+from discord.ext import commands
+from discord import app_commands
+from discord.ext import tasks
+import config
+from datetime import datetime
+import asyncio
+import db
+
+from cogs import panel_settings
+
+TICKET_COLLECTION = "tickets"
+BUTTON_COLLECTION = "ticket_buttons"
+ACTIVITY_COLLECTION = "ticket_activity"
+BLACKLIST_COLLECTION = "ticket_blacklist"
+COUNTER_COLLECTION = "ticket_counter"
+STATS_COLLECTION = "ticket_stats"
+
+# No staff reply within this long → send one warning ping to the support role.
+INACTIVITY_SECONDS = 5 * 3600
+# Still nothing after the warning → auto-close the ticket.
+CLOSE_GRACE_SECONDS = 30 * 60
+
+
+# ─── Storage helpers ────────────────────────────────────────────────────────
+def load_tickets() -> dict:
+    return db.load(TICKET_COLLECTION)
+
+
+def save_tickets(data: dict):
+    db.save(TICKET_COLLECTION, data)
+
+
+def load_activity() -> dict:
+    return db.load(ACTIVITY_COLLECTION)
+
+
+def save_activity(data: dict):
+    db.save(ACTIVITY_COLLECTION, data)
+
+
+def load_blacklist() -> dict:
+    return db.load(BLACKLIST_COLLECTION)
+
+
+def save_blacklist(data: dict):
+    db.save(BLACKLIST_COLLECTION, data)
+
+
+def load_stats() -> dict:
+    return db.load(STATS_COLLECTION)
+
+
+def save_stats(data: dict):
+    db.save(STATS_COLLECTION, data)
+
+
+def _next_ticket_number(guild_id: int) -> int:
+    counters = db.load(COUNTER_COLLECTION)
+    gid = str(guild_id)
+    n = counters.get(gid, 0) + 1
+    counters[gid] = n
+    db.save(COUNTER_COLLECTION, counters)
+    return n
+
+
+BUTTON_DEFAULTS = {
+    "dropdown_placeholder": "Select a ticket type...",
+    "claim_label": "Claim",
+    "claim_emoji": None,
+    "close_label": "Close",
+    "close_emoji": None,
+}
+
+
+def load_btn(guild_id: int) -> dict:
+    data = db.load_doc(BUTTON_COLLECTION, doc_id=str(guild_id))
+    return {**BUTTON_DEFAULTS, **data}
+
+
+def save_btn(guild_id: int, data: dict):
+    db.save_doc(BUTTON_COLLECTION, data, doc_id=str(guild_id))
+
+
+def _record_stat(guild_id: int, user_id: int, field: str):
+    stats = load_stats()
+    gid = str(guild_id)
+    s = stats.setdefault(gid, {}).setdefault(str(user_id), {"claimed": 0, "closed": 0})
+    s[field] = s.get(field, 0) + 1
+    save_stats(stats)
+
+
+# ─── Permission helpers ─────────────────────────────────────────────────────
+def _is_support_staff(member: discord.Member, cfg: dict) -> bool:
+    """True for anyone who should be able to act as staff anywhere in the
+    ticket system: Manage Channels permission, or any configured support
+    role across the guild's ticket types."""
+    if member.guild_permissions.manage_channels:
+        return True
+    role_ids = {t.get("support_role_id") for t in cfg.get("types", {}).values() if t.get("support_role_id")}
+    if role_ids:
+        member_role_ids = {r.id for r in member.roles}
+        if role_ids.intersection(member_role_ids):
+            return True
+    return False
+
+
+def _get_claimed_by(channel_id: int) -> int | None:
+    activity = load_activity()
+    rec = activity.get(str(channel_id))
+    return rec.get("claimed_by") if rec else None
+
+
+def _can_close_ticket(member: discord.Member, channel: discord.TextChannel, cfg: dict) -> bool:
+    """- Always: the ticket owner.
+    - Unclaimed ticket: any support staff.
+    - Claimed ticket: only the staff member who claimed it."""
+    is_owner = channel.topic == str(member.id)
+    if is_owner:
+        return True
+
+    claimed_by = _get_claimed_by(channel.id)
+    if claimed_by:
+        return member.id == claimed_by
+
+    return _is_support_staff(member, cfg)
+
+
+# ─── Problem Modal ──────────────────────────────────────────────────────────
+class ProblemModal(discord.ui.Modal, title="Open a Ticket"):
+    def __init__(self, type_key: str, question: str):
+        super().__init__()
+        self.type_key = type_key
+        self.problem = discord.ui.TextInput(
+            label=question[:45],
+            style=discord.TextStyle.paragraph,
+            placeholder="Describe your issue clearly so the team can help you quickly...",
+            min_length=5,
+            max_length=1000,
+        )
+        self.add_item(self.problem)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
+        await _create_ticket(interaction, self.type_key, self.problem.value)
+
+
+# ─── Create ticket channel ──────────────────────────────────────────────────
+async def _create_ticket(interaction: discord.Interaction, type_key: str, problem_text: str):
+    ts = load_tickets()
+    cfg = ts.get(str(interaction.guild_id))
+    if not cfg:
+        await interaction.followup.send("Ticket system is not configured. Use `/ticket setup`.", ephemeral=True)
+        return
+
+    t = cfg.get("types", {}).get(type_key)
+    if not t:
+        await interaction.followup.send("This ticket type is no longer available.", ephemeral=True)
+        return
+
+    # One open ticket per member at a time, across ALL types/categories.
+    activity = load_activity()
+    for ch_id, rec in activity.items():
+        if rec.get("guild_id") == interaction.guild_id and rec.get("owner_id") == interaction.user.id:
+            existing = interaction.guild.get_channel(int(ch_id))
+            if existing:
+                await interaction.followup.send(f"You already have an open ticket: {existing.mention}", ephemeral=True)
+                return
+
+    category = interaction.guild.get_channel(t.get("category_id"))
+
+    overwrites = {}
+    if category:
+        overwrites.update(category.overwrites)
+
+    overwrites[interaction.guild.default_role] = discord.PermissionOverwrite(read_messages=False)
+    overwrites[interaction.user] = discord.PermissionOverwrite(
+        read_messages=True, send_messages=True, attach_files=True
+    )
+    overwrites[interaction.guild.me] = discord.PermissionOverwrite(
+        read_messages=True, send_messages=True, manage_channels=True, manage_messages=True
+    )
+
+    support_role = None
+    support_role_id = t.get("support_role_id")
+    if support_role_id:
+        support_role = interaction.guild.get_role(support_role_id)
+        if support_role:
+            overwrites[support_role] = discord.PermissionOverwrite(read_messages=True, send_messages=True)
+
+    number = _next_ticket_number(interaction.guild_id)
+    ch_name = f"ticket-{number:04d}"
+
+    try:
+        ticket_channel = await interaction.guild.create_text_channel(
+            name=ch_name,
+            topic=str(interaction.user.id),
+            category=category,
+            overwrites=overwrites,
+        )
+    except Exception as e:
+        await interaction.followup.send(f"Failed to create ticket channel: {e}", ephemeral=True)
+        return
+
+    note_text = cfg.get("panel_message") or panel_settings.render(panel_settings.get("ticket_instructions_text")) or (
+        "Please write what you need — our team will be with you shortly."
+    )
+    reason_label = panel_settings.get("ticket_reason_label") or "Ticket Reason"
+
+    opened_line = f"{interaction.user.mention} • <t:{int(datetime.now().timestamp())}:R>"
+    if support_role:
+        opened_line += f" • {support_role.mention}"
+
+    embed = discord.Embed(
+        title=f"Ticket #{number:04d} — {t['label']}",
+        description=f"**{reason_label}**\n>>> {problem_text[:350]}",
+        color=config.EMBED_COLOR,
+        timestamp=datetime.now(),
+    )
+    embed.set_thumbnail(url=interaction.user.display_avatar.url)
+
+    banner_url = cfg.get("banner_url") or ""
+    if banner_url:
+        embed.set_image(url=banner_url)
+
+    embed.add_field(name="Opened by", value=opened_line, inline=False)
+    embed.add_field(name="Note", value=note_text[:200], inline=False)
+    embed.set_footer(text=f"{config.BOT_NAME} | Dev: {config.DEVELOPER}")
+
+    ping_parts = [interaction.user.mention]
+    if support_role:
+        ping_parts.append(support_role.mention)
+
+    await ticket_channel.send(
+        content=" ".join(ping_parts),
+        embed=embed,
+        view=TicketControlView(interaction.guild_id),
+        allowed_mentions=discord.AllowedMentions(users=True, roles=True),
+    )
+    await interaction.followup.send(f"Your ticket has been created: {ticket_channel.mention}", ephemeral=True)
+
+    activity = load_activity()
+    activity[str(ticket_channel.id)] = {
+        "guild_id": interaction.guild_id,
+        "owner_id": interaction.user.id,
+        "type_key": type_key,
+        "ticket_number": number,
+        "opened_at": datetime.now().timestamp(),
+        "last_reply_at": None,
+        "warned": False,
+        "warned_at": None,
+        "claimed_by": None,
+    }
+    save_activity(activity)
+
+
+# ─── Ticket type dropdown (on /ticket setup panel) ─────────────────────────
+class TicketTypeSelect(discord.ui.Select):
+    def __init__(self, options, disabled: bool = False, placeholder: str = "Select a ticket type..."):
+        super().__init__(
+            placeholder=placeholder,
+            options=options,
+            custom_id="ticket_type_select",
+            disabled=disabled,
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+        type_key = self.values[0]
+
+        bl = load_blacklist()
+        if interaction.user.id in bl.get(str(interaction.guild_id), []):
+            await interaction.response.send_message("You're not allowed to open tickets.", ephemeral=True)
+            return
+
+        ts = load_tickets()
+        cfg = ts.get(str(interaction.guild_id), {})
+        t = cfg.get("types", {}).get(type_key)
+        if not t:
+            await interaction.response.send_message("This ticket type is no longer available.", ephemeral=True)
+            return
+
+        await interaction.response.send_modal(
+            ProblemModal(type_key, t.get("question") or "What do you need help with?")
+        )
+
+
+class TicketCreateView(discord.ui.View):
+    def __init__(self, guild_id: int = 0, types: dict = None):
+        super().__init__(timeout=None)
+        types = types or {}
+        btn = load_btn(guild_id)
+
+        if types:
+            options = [
+                discord.SelectOption(
+                    label=t["label"][:100],
+                    value=key,
+                    description=(t.get("description") or None),
+                    emoji=t.get("emoji") or None,
+                )
+                for key, t in types.items()
+            ][:25]
+            self.add_item(TicketTypeSelect(options, placeholder=btn.get("dropdown_placeholder", "Select a ticket type...")))
+        else:
+            self.add_item(
+                TicketTypeSelect(
+                    [discord.SelectOption(label="No ticket types configured", value="_none")],
+                    disabled=True,
+                    placeholder="No ticket types configured",
+                )
+            )
+
+
+# ─── Ticket Control Buttons (inside the ticket channel) ────────────────────
+class TicketControlView(discord.ui.View):
+    def __init__(self, guild_id: int = 0):
+        super().__init__(timeout=None)
+        btn = load_btn(guild_id)
+        self.claim.label = btn["claim_label"]
+        self.claim.emoji = btn["claim_emoji"]
+        self.close.label = btn["close_label"]
+        self.close.emoji = btn["close_emoji"]
+        self.support_panel.label = panel_settings.get("ticket_support_panel_label") or "Support Panel"
+        self.support_panel.emoji = panel_settings.get("ticket_support_panel_emoji") or None
+
+    @discord.ui.button(label="Claim", style=discord.ButtonStyle.success, custom_id="ticket_claim")
+    async def claim(self, interaction: discord.Interaction, button: discord.ui.Button):
+        ts = load_tickets()
+        cfg = ts.get(str(interaction.guild_id), {})
+        if not _is_support_staff(interaction.user, cfg):
+            await interaction.response.send_message("Only support staff can claim tickets.", ephemeral=True)
+            return
+
+        activity = load_activity()
+        ch_key = str(interaction.channel_id)
+        rec = activity.get(ch_key)
+        if rec and rec.get("claimed_by") and rec["claimed_by"] != interaction.user.id:
+            claimer = interaction.guild.get_member(rec["claimed_by"])
+            await interaction.response.send_message(
+                f"Already claimed by {claimer.mention if claimer else 'another staff member'}.", ephemeral=True
+            )
+            return
+
+        if not rec:
+            rec = {
+                "guild_id": interaction.guild_id,
+                "owner_id": int(interaction.channel.topic) if interaction.channel.topic and interaction.channel.topic.isdigit() else None,
+                "type_key": None,
+                "ticket_number": None,
+                "opened_at": datetime.now().timestamp(),
+                "last_reply_at": None,
+                "warned": False,
+                "warned_at": None,
+            }
+        rec["claimed_by"] = interaction.user.id
+        activity[ch_key] = rec
+        save_activity(activity)
+        _record_stat(interaction.guild_id, interaction.user.id, "claimed")
+
+        embed = discord.Embed(
+            description=(
+                f"This ticket has been claimed by {interaction.user.mention}.\n"
+                f"Only {interaction.user.mention} or the ticket owner can close it from now on."
+            ),
+            color=config.SUCCESS_COLOR,
+            timestamp=datetime.now(),
+        )
+        embed.set_footer(text=f"{config.BOT_NAME} | Dev: {config.DEVELOPER}")
+        await interaction.response.send_message(embed=embed)
+
+        button.disabled = True
+        button.label = f"Claimed by {interaction.user.display_name}"
+        await interaction.message.edit(view=self)
+
+    @discord.ui.button(label="Close", style=discord.ButtonStyle.danger, custom_id="ticket_close_btn")
+    async def close(self, interaction: discord.Interaction, button: discord.ui.Button):
+        ts = load_tickets()
+        cfg = ts.get(str(interaction.guild_id), {})
+        if not _can_close_ticket(interaction.user, interaction.channel, cfg):
+            claimed_by = _get_claimed_by(interaction.channel_id)
+            if claimed_by:
+                claimer = interaction.guild.get_member(claimed_by)
+                await interaction.response.send_message(
+                    f"This ticket is claimed by {claimer.mention if claimer else 'another staff member'} — "
+                    f"only they or the ticket owner can close it.", ephemeral=True
+                )
+            else:
+                await interaction.response.send_message("Only support staff or the ticket owner can close this.", ephemeral=True)
+            return
+
+        await interaction.response.send_message(
+            embed=discord.Embed(
+                description="This ticket will be closed and logged in 5 seconds...",
+                color=config.WARNING_COLOR,
+            )
+        )
+        await asyncio.sleep(5)
+        await _save_transcript_and_delete(interaction.channel, interaction.guild, closed_by=interaction.user.id)
+
+    @discord.ui.button(label="Support Panel", style=discord.ButtonStyle.secondary, custom_id="ticket_support_panel")
+    async def support_panel(self, interaction: discord.Interaction, button: discord.ui.Button):
+        ts = load_tickets()
+        cfg = ts.get(str(interaction.guild_id), {})
+        activity = load_activity()
+        rec = activity.get(str(interaction.channel_id), {})
+        t = cfg.get("types", {}).get(rec.get("type_key")) if rec.get("type_key") else None
+        support_role = interaction.guild.get_role(t.get("support_role_id") or 0) if t else None
+        claimed_by = _get_claimed_by(interaction.channel_id)
+        claimer = interaction.guild.get_member(claimed_by) if claimed_by else None
+
+        lines = [
+            f"Support role: {support_role.mention if support_role else 'none configured'}",
+            f"Claimed by: {claimer.mention if claimer else 'not claimed yet'}",
+            "",
+            "Available commands in this ticket:",
+            "`/ticket-add` — add another member",
+            "`/ticket-transfer` — hand this ticket to another staff member",
+            "`/ticket-close` — close this ticket",
+        ]
+        embed = discord.Embed(description="\n".join(lines), color=config.EMBED_COLOR)
+        embed.set_footer(text=f"{config.BOT_NAME} | Dev: {config.DEVELOPER}")
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
+
+# ─── Transcript save and channel delete ─────────────────────────────────────
+async def _save_transcript_and_delete(channel: discord.TextChannel, guild: discord.Guild, closed_by: int = None):
+    activity = load_activity()
+    rec = activity.pop(str(channel.id), None)
+    save_activity(activity)
+
+    if closed_by:
+        _record_stat(guild.id, closed_by, "closed")
+
+    ts = load_tickets()
+    cfg = ts.get(str(guild.id), {})
+    log_ch_id = cfg.get("log_channel_id")
+
+    if log_ch_id:
+        log_channel = guild.get_channel(log_ch_id)
+        if log_channel:
+            lines = []
+            async for msg in channel.history(limit=500, oldest_first=True):
+                ts_time = msg.created_at.strftime("%Y-%m-%d %H:%M")
+                content = msg.content or "[embed/attachment]"
+                lines.append(f"[{ts_time}] {msg.author.display_name}: {content}")
+
+            transcript_text = "\n".join(lines) if lines else "No messages."
+            file_obj = discord.File(io.BytesIO(transcript_text.encode("utf-8")), filename=f"transcript-{channel.name}.txt")
+
+            owner_id = rec.get("owner_id") if rec else channel.topic
+            owner_mention = f"<@{owner_id}>" if owner_id else "Unknown"
+
+            type_label = None
+            if rec and rec.get("type_key"):
+                t = cfg.get("types", {}).get(rec["type_key"])
+                type_label = t["label"] if t else rec["type_key"]
+
+            desc = f"**Channel:** #{channel.name}\n**Owner:** {owner_mention}\n**Closed at:** <t:{int(datetime.now().timestamp())}:F>"
+            if type_label:
+                desc += f"\n**Type:** {type_label}"
+            if closed_by:
+                desc += f"\n**Closed by:** <@{closed_by}>"
+
+            embed = discord.Embed(title="Ticket Transcript", description=desc, color=config.EMBED_COLOR, timestamp=datetime.now())
+            embed.set_footer(text=f"{config.BOT_NAME} | Dev: {config.DEVELOPER}")
+            await log_channel.send(embed=embed, file=file_obj)
+
+    try:
+        await channel.delete()
+    except Exception:
+        pass
+
+
+# ─── Tickets Cog ─────────────────────────────────────────────────────────────
+class Tickets(commands.Cog):
+    ticket_group = app_commands.Group(
+        name="ticket",
+        description="Manage the ticket system",
+        default_permissions=discord.Permissions(administrator=True),
+    )
+    ticket_type_group = app_commands.Group(
+        name="ticket-type",
+        description="Manage the ticket types shown in
