@@ -374,8 +374,8 @@ class HelpLayoutView(discord.ui.LayoutView):
         section = next((s for s in HELP_SECTIONS if s["key"] == active_key), None)
 
         header_text = (
-            f"# 📚 {config.BOT_NAME} — Commands\n"
-            f"**{config.SERVER_NAME}** | Developer: **{config.DEVELOPER}**"
+            f"**📚 {config.BOT_NAME} — Commands**\n"
+            f"-# {config.SERVER_NAME} | Developer: {config.DEVELOPER}"
         )
         header_section = discord.ui.Section(
             discord.ui.TextDisplay(header_text),
@@ -383,7 +383,7 @@ class HelpLayoutView(discord.ui.LayoutView):
         )
 
         if section:
-            body_text = f"## {_section_emoji_str(section)} {section['title']}\n{section['value']}"
+            body_text = f"**{_section_emoji_str(section)} {section['title']}**\n{section['value']}"
         else:
             body_text = "اختار قسم من المنيو تحت باش تشوف الأوامر ديالو 👇"
 
