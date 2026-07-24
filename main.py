@@ -336,7 +336,7 @@ class HelpSelect(discord.ui.Select):
             for section in HELP_SECTIONS
         ]
         super().__init__(
-            placeholder="📚 اختار قسم الأوامر...",
+            placeholder="<:11569crayon:1530119885621952543> اختار قسم الأوامر...",
             options=options,
             custom_id="help_section_select",
         )
@@ -367,7 +367,7 @@ class HelpLayoutView(discord.ui.LayoutView):
         if section:
             body_text = f"**{section['emoji']} {section['title']}**\n{section['value']}"
         else:
-            body_text = "اختار قسم من المنيو تحت باش تشوف الأوامر ديالو <:fl_arrow_yellow:1528968893031514262>"
+            body_text = "اختار قسم من المنيو تحت باش تشوف الأوامر ديالو <:11569crayon:1530119885621952543>
 
         footer_text = f"-# {config.BOT_NAME} | Dev: {config.DEVELOPER}"
 
