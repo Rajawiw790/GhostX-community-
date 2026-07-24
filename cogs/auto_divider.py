@@ -82,7 +82,7 @@ class DividerCog(commands.Cog):
         _save(raw)
         self._reload_cache()
 
-        thumb = image_url if image_url else "attachment://divider.png"
+        thumb = image_url if image_url else "attachment://Gx.png"
         embed = discord.Embed(
             title="🖼️ تم تفعيل الفاصل التلقائي",
             description=(
@@ -93,8 +93,8 @@ class DividerCog(commands.Cog):
             color=config.SUCCESS_COLOR,
         )
         if not image_url:
-            file = discord.File("assets/divider.png", filename="divider.png")
-            embed.set_image(url="attachment://divider.png")
+            file = discord.File("assets/Gx.png", filename="Gx.png")
+            embed.set_image(url="attachment://Gx.png")
             await interaction.response.send_message(embed=embed, file=file, ephemeral=True)
         else:
             embed.set_image(url=image_url)
@@ -137,8 +137,8 @@ class DividerCog(commands.Cog):
             embed.set_image(url=image_url)
             await interaction.response.send_message(embed=embed, ephemeral=True)
         else:
-            file = discord.File("assets/divider.png", filename="divider.png")
-            embed.set_image(url="attachment://divider.png")
+            file = discord.File("assets/Gx.png", filename="Gx.png")
+            embed.set_image(url="attachment://Gx.png")
             await interaction.response.send_message(embed=embed, file=file, ephemeral=True)
 
     @divider.command(name="list", description="📋 قائمة الرومات المفعّل فيها الفاصل")
