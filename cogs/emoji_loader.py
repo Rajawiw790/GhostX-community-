@@ -49,13 +49,15 @@ NAME_MAP = {
     # ── مخصصة لأقسام /help ────────────────────────────────────────────────
     "fl_ticket":       "29909ticket",
     "fl_application":  "32535applicationapprivedids",
-    "fl_music":        "3358spotify",
+    "fl_music":        "5356spotifymusicdisc",
     "fl_ai":           "85722bot",
     "fl_stats":        "41378statistiques",
     "fl_star":         "9275yellowstar",
     "fl_voice":        "15830voicechannelgreenalt",
     "fl_announcement": "6619megaphone",
     "fl_home":         "11757home",
+    "fl_resources":    "36438designer",
+    "fl_emojis":       "19991colorroledotspackids",
 }
 
 EMOJI_NAMES = list(NAME_MAP.keys())
