@@ -218,8 +218,8 @@ class Giveaway(commands.Cog):
         await message.edit(view=view)
 
         await channel.send(
-            f"مبروك! {', '.join(winners_mentions)}\n"
-            f"فزتوا بـ **{giveaway['prize']}**!"
+            f"Winner! {', '.join(winners_mentions)}\n"
+            f"prize **{giveaway['prize']}**!"
         )
 
         del self.active_giveaways[message_id]
