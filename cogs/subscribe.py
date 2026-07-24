@@ -3,15 +3,19 @@ Subscribe Approval System — Ghostx Community
 ─────────────────────────────────────────────
 Same idea as the Boost system, running side by side with its own channel,
 role and settings so a server can run both at once.
-• Admin runs /subscribe setup — channel, role, mode and emoji are picked
-  directly from Discord's native pickers.
+• Admin runs /subscribe setup — channel, role, reviewer role, mode and emoji
+  are picked directly from Discord's native pickers.
 • /subscribe update    — change only the fields you pass, everything else stays as is.
 • /subscribe remove    — disable the system.
 • /subscribe info      — show current settings.
 • /subscribe customize — change the review panel's title/description/button text & emoji.
 • When a user posts an image in the watch channel:
-    - Mode "react": bot reacts with the chosen emoji. If admin also reacts, user gets the subscriber role.
-    - Mode "panel": bot posts a short review card below the image with Accept/Reject buttons.
+    - Mode "react": bot reacts with the chosen emoji. If a reviewer also reacts, user gets the subscriber role.
+    - Mode "panel": bot posts a short text review card below the image with Accept/Reject buttons.
+• Only members with the configured reviewer role (or Manage Roles if none is set)
+  can Accept/Reject or approve via reaction.
+
+All responses are plain text (no embeds) — short and to the point.
 """
 
 import discord
@@ -26,6 +30,20 @@ from cogs import emoji_loader
 
 SUBSCRIBE_COLLECTION = "subscribe_settings"
 
+# ─── custom emojis (uploaded by ghostx_1x on the FastLife/Ghostx server) ───
+EMOJI = {
+    "accept": "<:fl_check:1528968902837538846>",
+    "reject": "<:fl_x:1528968940749848636>",
+    "proof": "<:verified:1530120198080827583>",
+    "success": "<:squarecheckmark:1530119784878964786>",
+    "error": "<:x:1530119812515106928>",
+    "warning": "<:warning:1530119891326079118>",
+    "role": "<:roleids:1530119978773381192>",
+    "settings": "<:settings:1530119866366034010>",
+    "info": "<:info:1530120094363942963>",
+    "remove": "<:supprimer:1530119918660354139>",
+}
+
 
 def load_subscribe() -> dict:
     return db.load(SUBSCRIBE_COLLECTION)
@@ -35,16 +53,35 @@ def save_subscribe(data: dict):
     db.save(SUBSCRIBE_COLLECTION, data)
 
 
+def _msg(emoji: str, title: str, **fields) -> str:
+    """Consistent short plain-text layout: emoji + bold title, then fields."""
+    lines = [f"{emoji} **{title}**"]
+    for label, value in fields.items():
+        if value is not None:
+            lines.append(f"› **{label}:** {value}")
+    return "\n".join(lines)
+
+
+def _can_review(member: discord.Member, reviewer_role_id: int | None) -> bool:
+    """Only the configured reviewer role can Accept/Reject — falls back to Manage Roles if none is set."""
+    if reviewer_role_id:
+        role = member.guild.get_role(reviewer_role_id)
+        if role:
+            return role in member.roles
+    return member.guild_permissions.manage_roles
+
+
 # ─── Accept / Reject panel view ─────────────────────────────────────────────
 class SubscribeReviewPanel(discord.ui.View):
-    def __init__(self, target_user_id: int, guild_id: int, subscriber_role_id: int):
+    def __init__(self, target_user_id: int, guild_id: int, subscriber_role_id: int, reviewer_role_id: int = None):
         super().__init__(timeout=None)
         self.target_user_id     = target_user_id
         self.guild_id           = guild_id
         self.subscriber_role_id = subscriber_role_id
+        self.reviewer_role_id   = reviewer_role_id
 
-        accept_emoji = emoji_loader.get_obj("fl_check") or panel_settings.get("subscribe_accept_emoji") or "✅"
-        reject_emoji = emoji_loader.get_obj("fl_x")     or panel_settings.get("subscribe_reject_emoji") or "❌"
+        accept_emoji = emoji_loader.get_obj("fl_check") or panel_settings.get("subscribe_accept_emoji") or EMOJI["accept"]
+        reject_emoji = emoji_loader.get_obj("fl_x")     or panel_settings.get("subscribe_reject_emoji") or EMOJI["reject"]
 
         accept_btn = discord.ui.Button(
             label=panel_settings.get("subscribe_accept_label") or "Accept",
@@ -64,8 +101,8 @@ class SubscribeReviewPanel(discord.ui.View):
         self.add_item(reject_btn)
 
     async def accept(self, interaction: discord.Interaction):
-        if not interaction.user.guild_permissions.manage_roles:
-            await interaction.response.send_message("❌ You don't have permission to manage roles.", ephemeral=True)
+        if not _can_review(interaction.user, self.reviewer_role_id):
+            await interaction.response.send_message(f"{EMOJI['error']} You're not allowed to review proofs.", ephemeral=True)
             return
 
         guild  = interaction.guild
@@ -73,40 +110,40 @@ class SubscribeReviewPanel(discord.ui.View):
         role   = guild.get_role(self.subscriber_role_id) if self.subscriber_role_id else None
 
         if not member:
-            await interaction.response.send_message("❌ Member not found (they may have left).", ephemeral=True)
+            await interaction.response.send_message(f"{EMOJI['error']} Member not found (they may have left).", ephemeral=True)
             return
 
         try:
             if role:
                 await member.add_roles(role, reason="Subscribe approved by admin")
-            embed = discord.Embed(
-                title="✅ Subscribe Approved",
-                description=f"**User:** {member.mention}\n\nApproved — they now have {role.mention if role else 'the subscriber role'}.",
-                color=config.SUCCESS_COLOR,
-                timestamp=datetime.now()
+            await interaction.response.edit_message(
+                content=_msg(
+                    EMOJI["success"], "Subscribe Approved",
+                    User=member.mention,
+                    Role=role.mention if role else "subscriber role",
+                    Moderator=interaction.user.mention,
+                ),
+                view=None,
             )
-            embed.set_thumbnail(url=member.display_avatar.url)
-            embed.set_footer(text=panel_settings.render(panel_settings.get("subscribe_footer")) or f"Approved by {interaction.user.display_name} | {config.BOT_NAME}")
-            await interaction.response.edit_message(embed=embed, view=None)
         except Exception as e:
-            await interaction.response.send_message(f"❌ Error: {e}", ephemeral=True)
+            await interaction.response.send_message(f"{EMOJI['error']} Error: {e}", ephemeral=True)
 
     async def reject(self, interaction: discord.Interaction):
-        if not interaction.user.guild_permissions.manage_roles:
-            await interaction.response.send_message("❌ You don't have permission.", ephemeral=True)
+        if not _can_review(interaction.user, self.reviewer_role_id):
+            await interaction.response.send_message(f"{EMOJI['error']} You're not allowed to review proofs.", ephemeral=True)
             return
 
         guild  = interaction.guild
         member = guild.get_member(self.target_user_id)
 
-        embed = discord.Embed(
-            title="❌ Subscribe Rejected",
-            description=f"**User:** {member.mention if member else 'Unknown'}\n\nRejected by {interaction.user.mention}.",
-            color=config.ERROR_COLOR,
-            timestamp=datetime.now()
+        await interaction.response.edit_message(
+            content=_msg(
+                EMOJI["reject"], "Subscribe Rejected",
+                User=member.mention if member else "Unknown",
+                Moderator=interaction.user.mention,
+            ),
+            view=None,
         )
-        embed.set_footer(text=panel_settings.render(panel_settings.get("subscribe_footer")) or f"{config.BOT_NAME} | Dev: {config.DEVELOPER}")
-        await interaction.response.edit_message(embed=embed, view=None)
 
 
 # ─── Subscribe Cog ───────────────────────────────────────────────────────────
@@ -147,6 +184,7 @@ class Subscribe(commands.Cog):
 
         mode = cfg.get("mode", "panel")
         subscriber_role_id = cfg.get("subscriber_role_id")
+        reviewer_role_id = cfg.get("reviewer_role_id")
 
         if mode == "react":
             emoji = cfg.get("reaction_emoji") or "✅"
@@ -155,28 +193,20 @@ class Subscribe(commands.Cog):
             except Exception:
                 pass
 
-        else:  # panel mode — short review card, one line + the image as proof
-            title = panel_settings.render(panel_settings.get("subscribe_title")) or "🔔 Subscribe Proof"
-            description = panel_settings.render(panel_settings.get("subscribe_description")) or (
-                "Proof submitted — waiting for review."
-            )
-            embed = discord.Embed(
-                title=title,
-                description=f"**User:** {message.author.mention} — {description}",
-                color=config.EMBED_COLOR,
-                timestamp=datetime.now()
-            )
-            embed.set_image(url=image_attachment.url)
-            embed.set_footer(text=panel_settings.render(panel_settings.get("subscribe_footer")) or f"{config.BOT_NAME} | Dev: {config.DEVELOPER}")
-
+        else:  # panel mode — short text card under the image the user already posted
             view = SubscribeReviewPanel(
                 target_user_id=message.author.id,
                 guild_id=message.guild.id,
-                subscriber_role_id=subscriber_role_id or 0
+                subscriber_role_id=subscriber_role_id or 0,
+                reviewer_role_id=reviewer_role_id,
             )
-            await message.channel.send(embed=embed, view=view)
+            await message.reply(
+                _msg(EMOJI["proof"], "Subscribe Proof", User=message.author.mention, Status="Waiting for review"),
+                view=view,
+                mention_author=False,
+            )
 
-    # ── React listener: if admin reacts with the chosen emoji → give role ──
+    # ── React listener: if a reviewer reacts with the chosen emoji → give role ──
     @commands.Cog.listener()
     async def on_raw_reaction_add(self, payload: discord.RawReactionActionEvent):
         if not payload.guild_id:
@@ -187,14 +217,14 @@ class Subscribe(commands.Cog):
         member = guild.get_member(payload.user_id)
         if not member or member.bot:
             return
-        if not member.guild_permissions.manage_roles:
-            return
 
         ss = load_subscribe()
         cfg = ss.get(str(guild.id))
         if not cfg or not cfg.get("enabled"):
             return
         if cfg.get("mode") != "react":
+            return
+        if not _can_review(member, cfg.get("reviewer_role_id")):
             return
 
         watch_ch_id = cfg.get("watch_channel_id")
@@ -226,11 +256,7 @@ class Subscribe(commands.Cog):
         try:
             await target.add_roles(role, reason="Subscribe approved via reaction")
             await channel.send(
-                embed=discord.Embed(
-                    title="✅ Subscribe Approved",
-                    description=f"{target.mention} has been given {role.mention}!",
-                    color=config.SUCCESS_COLOR
-                ),
+                _msg(EMOJI["success"], "Subscribe Approved", User=target.mention, Role=role.mention),
                 delete_after=10
             )
         except Exception:
@@ -242,7 +268,8 @@ class Subscribe(commands.Cog):
         channel="Channel where members post their subscribe proof images",
         role="Role to give when a subscribe is approved",
         mode="panel = Accept/Reject buttons | react = emoji reaction",
-        emoji="Emoji to react with — only used in react mode (default ✅)"
+        emoji="Emoji to react with — only used in react mode (default ✅)",
+        reviewer_role="Only members with this role can Accept/Reject (optional — defaults to Manage Roles)",
     )
     @app_commands.choices(mode=[
         app_commands.Choice(name="panel — Accept/Reject buttons", value="panel"),
@@ -255,6 +282,7 @@ class Subscribe(commands.Cog):
         role: discord.Role,
         mode: str = "panel",
         emoji: str = "✅",
+        reviewer_role: discord.Role = None,
     ):
         cfg = {
             "enabled": True,
@@ -262,11 +290,15 @@ class Subscribe(commands.Cog):
             "subscriber_role_id": role.id,
             "mode": mode,
             "reaction_emoji": emoji or "✅",
+            "reviewer_role_id": reviewer_role.id if reviewer_role else None,
         }
         ss = load_subscribe()
         ss[str(interaction.guild_id)] = cfg
         save_subscribe(ss)
-        await interaction.response.send_message(embed=self._summary_embed("✅ Subscribe System Set Up!", channel, role, mode, cfg["reaction_emoji"]), ephemeral=True)
+        await interaction.response.send_message(
+            self._summary(EMOJI["success"], "Subscribe System Set Up", channel, role, mode, cfg["reaction_emoji"], reviewer_role),
+            ephemeral=True
+        )
 
     # ─── /subscribe update ───────────────────────────────────────────────────
     @subscribe_group.command(name="update", description="✏️ Update the subscribe system — only fill in what you want to change")
@@ -274,7 +306,8 @@ class Subscribe(commands.Cog):
         channel="New watch channel (optional)",
         role="New subscriber role (optional)",
         mode="New mode (optional)",
-        emoji="New reaction emoji — react mode only (optional)"
+        emoji="New reaction emoji — react mode only (optional)",
+        reviewer_role="New reviewer role — send the @everyone role to clear it (optional)",
     )
     @app_commands.choices(mode=[
         app_commands.Choice(name="panel — Accept/Reject buttons", value="panel"),
@@ -287,18 +320,21 @@ class Subscribe(commands.Cog):
         role: discord.Role = None,
         mode: str = None,
         emoji: str = None,
+        reviewer_role: discord.Role = None,
     ):
         ss = load_subscribe()
         guild_id = str(interaction.guild_id)
         cfg = ss.get(guild_id)
         if not cfg:
-            await interaction.response.send_message("❌ Subscribe system not set up yet. Use `/subscribe setup` first.", ephemeral=True)
+            await interaction.response.send_message(f"{EMOJI['error']} Subscribe system not set up yet. Use `/subscribe setup` first.", ephemeral=True)
             return
 
         if channel: cfg["watch_channel_id"] = channel.id
         if role:    cfg["subscriber_role_id"] = role.id
         if mode:    cfg["mode"] = mode
         if emoji:   cfg["reaction_emoji"] = emoji
+        if reviewer_role:
+            cfg["reviewer_role_id"] = None if reviewer_role.is_default() else reviewer_role.id
         cfg["enabled"] = True
 
         ss[guild_id] = cfg
@@ -306,8 +342,9 @@ class Subscribe(commands.Cog):
 
         ch  = interaction.guild.get_channel(cfg["watch_channel_id"])
         rl  = interaction.guild.get_role(cfg["subscriber_role_id"])
+        rv  = interaction.guild.get_role(cfg["reviewer_role_id"]) if cfg.get("reviewer_role_id") else None
         await interaction.response.send_message(
-            embed=self._summary_embed("✅ Subscribe Settings Updated!", ch, rl, cfg.get("mode", "panel"), cfg.get("reaction_emoji", "✅")),
+            self._summary(EMOJI["success"], "Subscribe Settings Updated", ch, rl, cfg.get("mode", "panel"), cfg.get("reaction_emoji", "✅"), rv),
             ephemeral=True
         )
 
@@ -317,13 +354,10 @@ class Subscribe(commands.Cog):
         ss = load_subscribe()
         ss.pop(str(interaction.guild_id), None)
         save_subscribe(ss)
-        embed = discord.Embed(
-            title="🗑️ Subscribe System Removed",
-            description="The subscribe approval system has been disabled.",
-            color=config.ERROR_COLOR
+        await interaction.response.send_message(
+            _msg(EMOJI["remove"], "Subscribe System Removed", Status="Disabled"),
+            ephemeral=True
         )
-        embed.set_footer(text=f"{config.BOT_NAME} | Dev: {config.DEVELOPER}")
-        await interaction.response.send_message(embed=embed, ephemeral=True)
 
     # ─── /subscribe info ─────────────────────────────────────────────────────
     @subscribe_group.command(name="info", description="📊 Show current subscribe system settings")
@@ -331,12 +365,13 @@ class Subscribe(commands.Cog):
         ss = load_subscribe()
         cfg = ss.get(str(interaction.guild_id))
         if not cfg:
-            await interaction.response.send_message("ℹ️ Subscribe system is not set up yet.", ephemeral=True)
+            await interaction.response.send_message(f"{EMOJI['info']} Subscribe system is not set up yet.", ephemeral=True)
             return
         ch = interaction.guild.get_channel(cfg.get("watch_channel_id") or 0)
         rl = interaction.guild.get_role(cfg.get("subscriber_role_id") or 0)
+        rv = interaction.guild.get_role(cfg.get("reviewer_role_id") or 0) if cfg.get("reviewer_role_id") else None
         await interaction.response.send_message(
-            embed=self._summary_embed("📊 Subscribe System Settings", ch, rl, cfg.get("mode", "panel"), cfg.get("reaction_emoji", "✅")),
+            self._summary(EMOJI["info"], "Subscribe System Settings", ch, rl, cfg.get("mode", "panel"), cfg.get("reaction_emoji", "✅"), rv),
             ephemeral=True
         )
 
@@ -361,7 +396,7 @@ class Subscribe(commands.Cog):
         reject_emoji: str = None,
     ):
         if not any([title, description, accept_label, accept_emoji, reject_label, reject_emoji]):
-            await interaction.response.send_message("❌ Provide at least one field to change.", ephemeral=True)
+            await interaction.response.send_message(f"{EMOJI['error']} Provide at least one field to change.", ephemeral=True)
             return
         panel_settings.set_values(
             subscribe_title=title,
@@ -371,32 +406,22 @@ class Subscribe(commands.Cog):
             subscribe_reject_label=reject_label,
             subscribe_reject_emoji=reject_emoji,
         )
-        embed = discord.Embed(
-            title="✅ Subscribe Card Customized",
-            description="Changes will apply to the next subscribe proof posted.",
-            color=config.SUCCESS_COLOR
+        await interaction.response.send_message(
+            _msg(EMOJI["success"], "Subscribe Card Customized", Status="Applies to the next proof posted"),
+            ephemeral=True
         )
-        await interaction.response.send_message(embed=embed, ephemeral=True)
 
     # ─── helper ─────────────────────────────────────────────────────────────
-    def _summary_embed(self, title, channel, role, mode, emoji) -> discord.Embed:
-        embed = discord.Embed(title=title, color=config.SUCCESS_COLOR)
-        embed.add_field(name="📢 Watch Channel", value=channel.mention if channel else "❌ Not set", inline=True)
-        embed.add_field(name="🏷️ Subscriber Role", value=role.mention if role else "❌ Not set", inline=True)
-        embed.add_field(name="⚙️ Mode", value=f"`{mode}`", inline=True)
+    def _summary(self, emoji, title, channel, role, mode, reaction_emoji, reviewer_role) -> str:
+        fields = {
+            "Watch Channel": channel.mention if channel else "Not set",
+            "Subscriber Role": role.mention if role else "Not set",
+            "Reviewer Role": reviewer_role.mention if reviewer_role else "Anyone with Manage Roles",
+            "Mode": f"`{mode}`",
+        }
         if mode == "react":
-            embed.add_field(name="😀 Reaction Emoji", value=emoji, inline=True)
-        embed.add_field(
-            name="ℹ️ How it works",
-            value=(
-                "When a member posts an image in the watch channel:\n"
-                + ("• Bot reacts with the emoji. Admin reacts too → member gets the role." if mode == "react"
-                   else "• Bot shows a review card with Accept/Reject buttons. Admin clicks Accept → member gets the role.")
-            ),
-            inline=False
-        )
-        embed.set_footer(text=f"{config.BOT_NAME} | Dev: {config.DEVELOPER}")
-        return embed
+            fields["Reaction Emoji"] = reaction_emoji
+        return _msg(emoji, title, **fields)
 
 
 async def setup(bot):
