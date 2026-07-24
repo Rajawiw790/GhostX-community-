@@ -183,9 +183,13 @@ HELP_SECTIONS = [
         "emoji_name": "fl_admin",
         "fallback": "🛡️",
         "value": (
-            "`/ban` `/kick` `/mute` `/unmute`\n"
-            "`/clear` `/lock` `/unlock` `/slowmode`\n"
-            "`/warn` `/role add` `/role remove`"
+            "› `/ban` `/kick` — طرد أو حذف عضو\n"
+            "› `/mute` `/unmute` — كتم أو رفع الكتم\n"
+            "› `/warn` — إعطاء تحذير\n"
+            "› `/clear` — مسح رسائل\n"
+            "› `/lock` `/unlock` — قفل أو فتح الروم\n"
+            "› `/slowmode` — ضبط السلو مود\n"
+            "› `/role add` `/role remove` — إدارة الرتب"
         ),
     },
     {
@@ -193,7 +197,13 @@ HELP_SECTIONS = [
         "title": "Tickets",
         "emoji_name": "fl_ticket",
         "fallback": "🎫",
-        "value": "`/ticket setup` `/ticket update` `/ticket remove`\n`/ticket-add` `/ticket-close`",
+        "value": (
+            "› `/ticket setup` — تفعيل نظام التذاكر\n"
+            "› `/ticket update` — تعديل الإعدادات\n"
+            "› `/ticket remove` — إلغاء النظام\n"
+            "› `/ticket-add` — إضافة عضو للتذكرة\n"
+            "› `/ticket-close` — إغلاق التذكرة"
+        ),
     },
     {
         "key": "welcome",
@@ -201,10 +211,10 @@ HELP_SECTIONS = [
         "emoji_name": "fl_home",
         "fallback": "👋",
         "value": (
-            "`/welcome setup` `/welcome update` `/welcome remove`\n"
-            "`/welcome preview` `/welcome info`\n"
-            "`/boost setup` `/boost update` `/boost remove`\n"
-            "`/subscribe setup` `/subscribe update` `/subscribe remove`"
+            "› `/welcome setup` `/welcome update` `/welcome remove`\n"
+            "› `/welcome preview` `/welcome info`\n"
+            "› `/boost setup` `/boost update` `/boost remove`\n"
+            "› `/subscribe setup` `/subscribe update` `/subscribe remove`"
         ),
     },
     {
@@ -212,7 +222,10 @@ HELP_SECTIONS = [
         "title": "Applications",
         "emoji_name": "fl_application",
         "fallback": "📋",
-        "value": "`/setup apply` — Staff / Whitelist applications\n`/setup guide` — Full bot setup guide",
+        "value": (
+            "› `/setup apply` — طلبات Staff / Whitelist\n"
+            "› `/setup guide` — دليل إعداد البوت الكامل"
+        ),
     },
     {
         "key": "music",
@@ -220,21 +233,24 @@ HELP_SECTIONS = [
         "emoji_name": "fl_music",
         "fallback": "🎵",
         "value": (
-            "`/play` `/skip` `/stop` `/pause` `/resume`\n"
-            "`/queue` `/nowplaying` `/volume` `/loop`\n"
-            "`/join` `/leave`"
+            "› `/play` — تشغيل أو إضافة أغنية\n"
+            "› `/skip` `/stop` — تخطي أو إيقاف\n"
+            "› `/pause` `/resume` — إيقاف مؤقت أو استئناف\n"
+            "› `/queue` `/nowplaying` — عرض القائمة أو الأغنية الحالية\n"
+            "› `/volume` `/loop` — الصوت والتكرار\n"
+            "› `/join` `/leave` — دخول أو خروج الروم الصوتي"
         ),
     },
     {
         "key": "emojis",
         "title": "Emojis",
-        "emoji_name": None,
+        "emoji_name": "fl_emojis",
         "fallback": "😀",
         "value": (
-            "`/emoji steal` — Copy one emoji\n"
-            "`/emoji stealall` — Copy all emojis from a server\n"
-            "`/emoji uploadzip` — Upload a ZIP of emoji images\n"
-            "`/emoji list` `/emoji delete`"
+            "› `/emoji steal` — نسخ إيموجي واحد\n"
+            "› `/emoji stealall` — نسخ كل إيموجيات سيرفر آخر\n"
+            "› `/emoji uploadzip` — رفع ZIP فيه صور إيموجيات\n"
+            "› `/emoji list` `/emoji delete` — عرض أو حذف"
         ),
     },
     {
@@ -242,7 +258,10 @@ HELP_SECTIONS = [
         "title": "AI",
         "emoji_name": "fl_ai",
         "fallback": "🤖",
-        "value": "`/ai ask` — Ask the AI anything\n`/ai clear` — Clear your AI conversation history",
+        "value": (
+            "› `/ai ask` — اسأل الـ AI أي سؤال\n"
+            "› `/ai clear` — امسح سجل محادثتك"
+        ),
     },
     {
         "key": "stats",
@@ -250,9 +269,9 @@ HELP_SECTIONS = [
         "emoji_name": "fl_stats",
         "fallback": "📊",
         "value": (
-            "`/serverstats setup` — Create live member/bot/link channels\n"
-            "`/serverstats update` — Force refresh now\n"
-            "`/serverstats remove` — Remove stat channels"
+            "› `/serverstats setup` — إنشاء رومات إحصائيات حية\n"
+            "› `/serverstats update` — تحديث فوري\n"
+            "› `/serverstats remove` — حذف الرومات"
         ),
     },
     {
@@ -261,10 +280,10 @@ HELP_SECTIONS = [
         "emoji_name": "fl_star",
         "fallback": "⭐",
         "value": (
-            "`/ping` `/help` `/time` `/report`\n"
-            "`/profile` `/random` `/top` `/daily` `/balance`\n"
-            "`/rr add` `/rr remove` `/rr list` `/rr clear` — Reaction roles\n"
-            "`/rolepicker setup` — Self-assign roles menu"
+            "› `/ping` `/help` `/time` `/report`\n"
+            "› `/profile` `/random` `/top` `/daily` `/balance`\n"
+            "› `/rr add` `/rr remove` `/rr list` `/rr clear` — رتب بالرياكشن\n"
+            "› `/rolepicker setup` — قائمة رتب ذاتية"
         ),
     },
     {
@@ -272,18 +291,18 @@ HELP_SECTIONS = [
         "title": "Voice",
         "emoji_name": "fl_voice",
         "fallback": "🎙️",
-        "value": "`/voicepanel setup` — Join-to-Create voice system",
+        "value": "› `/voicepanel setup` — نظام Join-to-Create الصوتي",
     },
     {
         "key": "resources",
         "title": "Resources",
-        "emoji_name": None,
+        "emoji_name": "fl_resources",
         "fallback": "📦",
         "value": (
-            "`/resource submit` — Propose a resource (script/bot/plugin...)\n"
-            "`/resource list` `/resource search`\n"
-            "`/resource setup` — (Admin) set review/info/panel channels\n"
-            "`/resource setpublish` — (Admin) per-category publish channel"
+            "› `/resource submit` — اقترح مورد (سكريبت/بوت/بلوگين...)\n"
+            "› `/resource list` `/resource search`\n"
+            "› `/resource setup` — (Admin) ضبط رومات المراجعة\n"
+            "› `/resource setpublish` — (Admin) روم نشر لكل كاتيغوري"
         ),
     },
     {
@@ -292,8 +311,8 @@ HELP_SECTIONS = [
         "emoji_name": "fl_announcement",
         "fallback": "📢",
         "value": (
-            "`/say` — Send a message/embed as the bot, or DM a role\n"
-            "`/notify` — DM every member of a specific role"
+            "› `/say` — إرسال رسالة/embed باسم البوت، أو DM لرتبة\n"
+            "› `/notify` — DM لكل أعضاء رتبة معينة"
         ),
     },
 ]
