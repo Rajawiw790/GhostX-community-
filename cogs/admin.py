@@ -17,8 +17,8 @@ Slash commands and text shortcuts both call the same internal _do_* methods,
 so the moderation logic (hierarchy checks, DMs, permission handling) only
 lives in one place.
 
-All responses are sent as plain text (no embeds), prefixed with a matching
-custom emoji from the server's emoji list.
+All responses are plain text (no embeds), built through _msg() so every
+action shares the same layout: emoji + bold title, then labeled fields.
 """
 
 import discord
@@ -38,7 +38,6 @@ EMOJI = {
     "mute": "<:muted:1530119976361398433>",
     "unmute": "<:ouvert:1530119863555854437>",
     "warn": "<:warning:1530119891326079118>",
-    "warnings": "<:staffadmin:1530120140522524672>",
     "lock": "<:lockids:1530120245694566410>",
     "unlock": "<:ouvert:1530119863555854437>",
     "clear": "<:supprimer:1530119918660354139>",
@@ -49,8 +48,6 @@ EMOJI = {
     "nickname": "<:profil:1530119896380215438>",
     "success": "<:checkmark:1530119810061439107>",
     "error": "<:x:1530119812515106928>",
-    "member": "<:membre:1530119986104897657>",
-    "info": "<:info:1530120094363942963>",
 }
 
 
@@ -81,6 +78,24 @@ class Admin(commands.Cog):
     def _can_act_on(self, actor: discord.Member, target: discord.Member) -> bool:
         return actor == actor.guild.owner or target.top_role < actor.top_role
 
+    def _msg(self, emoji: str, title: str, **fields) -> str:
+        """Builds a consistent, professional plain-text response.
+
+        Example output:
+            <:fl_ban:...> **Member Banned**
+            › **Member:** @user (`123456789`)
+            › **Reason:** spamming
+            › **Moderator:** @admin
+        """
+        lines = [f"{emoji} **{title}**"]
+        for label, value in fields.items():
+            if value is not None:
+                lines.append(f"› **{label}:** {value}")
+        return "\n".join(lines)
+
+    def _error(self, text: str) -> str:
+        return f"{EMOJI['error']} {text}"
+
     async def _dm(self, member: discord.Member, description: str):
         try:
             await member.send(description)
@@ -90,45 +105,71 @@ class Admin(commands.Cog):
     # ─── shared moderation actions ─────────────────────────────────────
     async def _do_ban(self, actor: discord.Member, member: discord.Member, reason: str, delete_days: int = 0) -> str:
         if not self._can_act_on(actor, member):
-            return f"{EMOJI['error']} You cannot ban someone with an equal or higher role."
+            return self._error("You cannot ban someone with an equal or higher role.")
         await self._dm(member, f"You were banned from {actor.guild.name}.\nReason: {reason}")
         try:
             await member.ban(reason=f"{reason} | By: {actor}", delete_message_days=max(0, min(7, delete_days)))
         except discord.Forbidden:
-            return f"{EMOJI['error']} I don't have permission to ban this member."
-        return f"{EMOJI['ban']} {member.mention} (`{member.id}`) has been banned.\nReason: {reason}\nBy: {actor.mention}"
+            return self._error("I don't have permission to ban this member.")
+        return self._msg(
+            EMOJI["ban"], "Member Banned",
+            Member=f"{member.mention} (`{member.id}`)",
+            Reason=reason,
+            Moderator=actor.mention,
+        )
 
     async def _do_kick(self, actor: discord.Member, member: discord.Member, reason: str) -> str:
         if not self._can_act_on(actor, member):
-            return f"{EMOJI['error']} You cannot kick someone with an equal or higher role."
+            return self._error("You cannot kick someone with an equal or higher role.")
         await self._dm(member, f"You were kicked from {actor.guild.name}.\nReason: {reason}")
         try:
             await member.kick(reason=f"{reason} | By: {actor}")
         except discord.Forbidden:
-            return f"{EMOJI['error']} I don't have permission to kick this member."
-        return f"{EMOJI['kick']} {member.mention} (`{member.id}`) has been kicked.\nReason: {reason}\nBy: {actor.mention}"
+            return self._error("I don't have permission to kick this member.")
+        return self._msg(
+            EMOJI["kick"], "Member Kicked",
+            Member=f"{member.mention} (`{member.id}`)",
+            Reason=reason,
+            Moderator=actor.mention,
+        )
 
     async def _do_mute(self, actor: discord.Member, member: discord.Member, minutes: int, reason: str) -> str:
         if not self._can_act_on(actor, member):
-            return f"{EMOJI['error']} You cannot mute someone with an equal or higher role."
+            return self._error("You cannot mute someone with an equal or higher role.")
         minutes = max(1, min(40320, minutes))  # 28 days max
         try:
             await member.timeout(discord.utils.utcnow() + timedelta(minutes=minutes), reason=f"{reason} | By: {actor}")
         except discord.Forbidden:
-            return f"{EMOJI['error']} I don't have permission to mute this member."
-        return f"{EMOJI['mute']} {member.mention} has been muted for **{minutes} minutes**.\nReason: {reason}\nBy: {actor.mention}"
+            return self._error("I don't have permission to mute this member.")
+        return self._msg(
+            EMOJI["mute"], "Member Muted",
+            Member=member.mention,
+            Duration=f"{minutes} minutes",
+            Reason=reason,
+            Moderator=actor.mention,
+        )
 
     async def _do_unmute(self, actor: discord.Member, member: discord.Member) -> str:
         try:
             await member.timeout(None, reason=f"Unmuted by {actor}")
         except discord.Forbidden:
-            return f"{EMOJI['error']} I don't have permission to unmute this member."
-        return f"{EMOJI['unmute']} {member.mention} has been unmuted.\nBy: {actor.mention}"
+            return self._error("I don't have permission to unmute this member.")
+        return self._msg(
+            EMOJI["unmute"], "Member Unmuted",
+            Member=member.mention,
+            Moderator=actor.mention,
+        )
 
     async def _do_warn(self, actor: discord.Member, member: discord.Member, reason: str) -> str:
         count = _add_warning(actor.guild.id, member.id, reason, actor.id)
         await self._dm(member, f"You received a warning in {actor.guild.name}.\nReason: {reason}")
-        return f"{EMOJI['warn']} {member.mention} has been warned (total: {count}).\nReason: {reason}\nBy: {actor.mention}"
+        return self._msg(
+            EMOJI["warn"], "Member Warned",
+            Member=member.mention,
+            Reason=reason,
+            Total=str(count),
+            Moderator=actor.mention,
+        )
 
     async def _do_lock(self, actor: discord.Member, channel: discord.TextChannel, reason: str) -> str:
         overwrite = channel.overwrites_for(actor.guild.default_role)
@@ -136,8 +177,12 @@ class Admin(commands.Cog):
         try:
             await channel.set_permissions(actor.guild.default_role, overwrite=overwrite, reason=f"{reason} | By: {actor}")
         except discord.Forbidden:
-            return f"{EMOJI['error']} I don't have permission to lock this channel."
-        return f"{EMOJI['lock']} {channel.mention} has been locked.\nBy: {actor.mention}"
+            return self._error("I don't have permission to lock this channel.")
+        return self._msg(
+            EMOJI["lock"], "Channel Locked",
+            Channel=channel.mention,
+            Moderator=actor.mention,
+        )
 
     async def _do_unlock(self, actor: discord.Member, channel: discord.TextChannel) -> str:
         overwrite = channel.overwrites_for(actor.guild.default_role)
@@ -145,8 +190,12 @@ class Admin(commands.Cog):
         try:
             await channel.set_permissions(actor.guild.default_role, overwrite=overwrite, reason=f"Unlocked by {actor}")
         except discord.Forbidden:
-            return f"{EMOJI['error']} I don't have permission to unlock this channel."
-        return f"{EMOJI['unlock']} {channel.mention} has been unlocked.\nBy: {actor.mention}"
+            return self._error("I don't have permission to unlock this channel.")
+        return self._msg(
+            EMOJI["unlock"], "Channel Unlocked",
+            Channel=channel.mention,
+            Moderator=actor.mention,
+        )
 
     # ─── text-trigger shortcuts (no slash) ──────────────────────────────
     @commands.Cog.listener()
@@ -225,7 +274,7 @@ class Admin(commands.Cog):
             await message.delete()
             deleted = await message.channel.purge(limit=amount)
             confirm = await message.channel.send(
-                f"{EMOJI['clear']} Deleted **{len(deleted)}** messages.\nBy: {message.author.mention}"
+                self._msg(EMOJI["clear"], "Messages Cleared", Amount=str(len(deleted)), Moderator=message.author.mention)
             )
             await confirm.delete(delay=4)
         except discord.Forbidden:
@@ -247,18 +296,18 @@ class Admin(commands.Cog):
         try:
             uid = int(user_id)
         except ValueError:
-            await interaction.response.send_message(f"{EMOJI['error']} Invalid user ID.", ephemeral=True)
+            await interaction.response.send_message(self._error("Invalid user ID."), ephemeral=True)
             return
         try:
             await interaction.guild.unban(discord.Object(id=uid), reason=f"{reason} | By: {interaction.user}")
         except discord.NotFound:
-            await interaction.response.send_message(f"{EMOJI['error']} That user isn't banned.", ephemeral=True)
+            await interaction.response.send_message(self._error("That user isn't banned."), ephemeral=True)
             return
         except discord.Forbidden:
-            await interaction.response.send_message(f"{EMOJI['error']} I don't have permission to unban.", ephemeral=True)
+            await interaction.response.send_message(self._error("I don't have permission to unban."), ephemeral=True)
             return
         await interaction.response.send_message(
-            f"{EMOJI['unban']} User `{uid}` has been unbanned.\nBy: {interaction.user.mention}"
+            self._msg(EMOJI["unban"], "User Unbanned", User=f"`{uid}`", Moderator=interaction.user.mention)
         )
 
     @app_commands.command(name="kick", description="Kick a member from the server")
@@ -295,18 +344,24 @@ class Admin(commands.Cog):
     async def nickname(self, interaction: discord.Interaction, member: discord.Member, nickname: str = None):
         if not self._can_act_on(interaction.user, member):
             await interaction.response.send_message(
-                f"{EMOJI['error']} You cannot edit someone with an equal or higher role.", ephemeral=True
+                self._error("You cannot edit someone with an equal or higher role."), ephemeral=True
             )
             return
         try:
             await member.edit(nick=nickname, reason=f"By: {interaction.user}")
         except discord.Forbidden:
             await interaction.response.send_message(
-                f"{EMOJI['error']} I don't have permission to change that nickname.", ephemeral=True
+                self._error("I don't have permission to change that nickname."), ephemeral=True
             )
             return
-        desc = f"{member.mention}'s nickname was reset." if not nickname else f"{member.mention}'s nickname is now **{nickname}**."
-        await interaction.response.send_message(f"{EMOJI['nickname']} {desc}")
+        await interaction.response.send_message(
+            self._msg(
+                EMOJI["nickname"], "Nickname Updated",
+                Member=member.mention,
+                Nickname=nickname or "*(reset)*",
+                Moderator=interaction.user.mention,
+            )
+        )
 
     @app_commands.command(name="lock", description="Lock a channel (prevent members from sending messages)")
     @app_commands.describe(channel="Channel to lock (defaults to current)", reason="Reason for locking")
@@ -337,9 +392,13 @@ class Admin(commands.Cog):
             deleted = deleted[:amount]
         else:
             deleted = await interaction.channel.purge(limit=amount)
-        suffix = f" from {member.mention}" if member else ""
         await interaction.followup.send(
-            f"{EMOJI['clear']} Deleted **{len(deleted)}** messages{suffix}.\nBy: {interaction.user.mention}",
+            self._msg(
+                EMOJI["clear"], "Messages Cleared",
+                Amount=str(len(deleted)),
+                Target=member.mention if member else "All members",
+                Moderator=interaction.user.mention,
+            ),
             ephemeral=True,
         )
 
@@ -353,8 +412,12 @@ class Admin(commands.Cog):
         new_channel = await ch.clone(reason=f"Nuke by {interaction.user}")
         await new_channel.edit(position=position)
         await ch.delete()
-        await new_channel.send(f"{EMOJI['nuke']} Channel cleared.\nBy: {interaction.user.mention}")
-        await interaction.followup.send(f"{EMOJI['success']} Done — see {new_channel.mention}.", ephemeral=True)
+        await new_channel.send(
+            self._msg(EMOJI["nuke"], "Channel Cleared", Moderator=interaction.user.mention)
+        )
+        await interaction.followup.send(
+            self._msg(EMOJI["success"], "Nuke Complete", Channel=new_channel.mention), ephemeral=True
+        )
 
     @app_commands.command(name="slowmode", description="Set slowmode for a channel")
     @app_commands.describe(seconds="Slowmode delay in seconds (0 to disable, max 21600)", channel="Channel to apply slowmode (optional)")
@@ -366,11 +429,18 @@ class Admin(commands.Cog):
             await ch.edit(slowmode_delay=seconds)
         except discord.Forbidden:
             await interaction.response.send_message(
-                f"{EMOJI['error']} I don't have permission to edit this channel.", ephemeral=True
+                self._error("I don't have permission to edit this channel."), ephemeral=True
             )
             return
-        desc = f"Slowmode disabled in {ch.mention}." if seconds == 0 else f"Slowmode set to **{seconds}s** in {ch.mention}."
-        await interaction.response.send_message(f"{EMOJI['slowmode']} {desc}\nBy: {interaction.user.mention}")
+        await interaction.response.send_message(
+            self._msg(
+                EMOJI["slowmode"],
+                "Slowmode Disabled" if seconds == 0 else "Slowmode Updated",
+                Channel=ch.mention,
+                Delay=f"{seconds}s" if seconds else None,
+                Moderator=interaction.user.mention,
+            )
+        )
 
     # ─── /role ────────────────────────────────────────────────────────────
     role_group = app_commands.Group(
@@ -384,18 +454,21 @@ class Admin(commands.Cog):
     async def role_add(self, interaction: discord.Interaction, member: discord.Member, role: discord.Role):
         if role >= interaction.guild.me.top_role:
             await interaction.response.send_message(
-                f"{EMOJI['error']} That role is higher than my highest role.", ephemeral=True
+                self._error("That role is higher than my highest role."), ephemeral=True
             )
             return
         try:
             await member.add_roles(role, reason=f"By {interaction.user}")
         except discord.Forbidden:
             await interaction.response.send_message(
-                f"{EMOJI['error']} I don't have permission to manage roles.", ephemeral=True
+                self._error("I don't have permission to manage roles."), ephemeral=True
             )
             return
         await interaction.response.send_message(
-            f"{EMOJI['role_add']} {role.mention} added to {member.mention}.\nBy: {interaction.user.mention}"
+            self._msg(
+                EMOJI["role_add"], "Role Added",
+                Role=role.mention, Member=member.mention, Moderator=interaction.user.mention,
+            )
         )
 
     @role_group.command(name="remove", description="Remove a role from a member")
@@ -403,18 +476,21 @@ class Admin(commands.Cog):
     async def role_remove(self, interaction: discord.Interaction, member: discord.Member, role: discord.Role):
         if role >= interaction.guild.me.top_role:
             await interaction.response.send_message(
-                f"{EMOJI['error']} That role is higher than my highest role.", ephemeral=True
+                self._error("That role is higher than my highest role."), ephemeral=True
             )
             return
         try:
             await member.remove_roles(role, reason=f"By {interaction.user}")
         except discord.Forbidden:
             await interaction.response.send_message(
-                f"{EMOJI['error']} I don't have permission to manage roles.", ephemeral=True
+                self._error("I don't have permission to manage roles."), ephemeral=True
             )
             return
         await interaction.response.send_message(
-            f"{EMOJI['role_remove']} {role.mention} removed from {member.mention}.\nBy: {interaction.user.mention}"
+            self._msg(
+                EMOJI["role_remove"], "Role Removed",
+                Role=role.mention, Member=member.mention, Moderator=interaction.user.mention,
+            )
         )
 
 
