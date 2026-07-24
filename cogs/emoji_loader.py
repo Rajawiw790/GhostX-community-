@@ -45,6 +45,17 @@ NAME_MAP = {
     "fl_arrow_orange": "28079animatedarroworange",
     "fl_arrow_yellow": "15770animatedarrowyellow",
     "fl_arrow_white":  "51047animatedarrowwhite",
+
+    # ── مخصصة لأقسام /help ────────────────────────────────────────────────
+    "fl_ticket":       "29909ticket",
+    "fl_application":  "32535applicationapprivedids",
+    "fl_music":        "3358spotify",
+    "fl_ai":           "85722bot",
+    "fl_stats":        "41378statistiques",
+    "fl_star":         "9275yellowstar",
+    "fl_voice":        "15830voicechannelgreenalt",
+    "fl_announcement": "6619megaphone",
+    "fl_home":         "11757home",
 }
 
 EMOJI_NAMES = list(NAME_MAP.keys())
