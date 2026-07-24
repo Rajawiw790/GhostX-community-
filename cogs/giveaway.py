@@ -82,7 +82,7 @@ class GiveawayCardView(discord.ui.LayoutView):
         else:
             btn = discord.ui.Button(
                 label=f"Enter Giveaway ({len(self.participants)})",
-                emoji="🎁",
+                emoji="<:834134giftingchampion:1530120392583282689>",
                 style=discord.ButtonStyle.primary,
                 custom_id=f"giveaway_enter_{self.giveaway_id}",
             )
