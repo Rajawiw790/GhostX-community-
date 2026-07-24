@@ -180,6 +180,7 @@ HELP_SECTIONS = [
     {
         "key": "admin",
         "title": "Administration",
+        "emoji_name": "fl_admin",
         "fallback": "🛡️",
         "value": (
             "`/ban` `/kick` `/mute` `/unmute`\n"
@@ -190,12 +191,14 @@ HELP_SECTIONS = [
     {
         "key": "tickets",
         "title": "Tickets",
+        "emoji_name": "fl_ticket",
         "fallback": "🎫",
         "value": "`/ticket setup` `/ticket update` `/ticket remove`\n`/ticket-add` `/ticket-close`",
     },
     {
         "key": "welcome",
         "title": "Welcome, Boost & Subscribe",
+        "emoji_name": "fl_home",
         "fallback": "👋",
         "value": (
             "`/welcome setup` `/welcome update` `/welcome remove`\n"
@@ -207,12 +210,14 @@ HELP_SECTIONS = [
     {
         "key": "applications",
         "title": "Applications",
+        "emoji_name": "fl_application",
         "fallback": "📋",
         "value": "`/setup apply` — Staff / Whitelist applications\n`/setup guide` — Full bot setup guide",
     },
     {
         "key": "music",
         "title": "Music",
+        "emoji_name": "fl_music",
         "fallback": "🎵",
         "value": (
             "`/play` `/skip` `/stop` `/pause` `/resume`\n"
@@ -223,6 +228,7 @@ HELP_SECTIONS = [
     {
         "key": "emojis",
         "title": "Emojis",
+        "emoji_name": None,
         "fallback": "😀",
         "value": (
             "`/emoji steal` — Copy one emoji\n"
@@ -234,12 +240,14 @@ HELP_SECTIONS = [
     {
         "key": "ai",
         "title": "AI",
+        "emoji_name": "fl_ai",
         "fallback": "🤖",
         "value": "`/ai ask` — Ask the AI anything\n`/ai clear` — Clear your AI conversation history",
     },
     {
         "key": "stats",
         "title": "Server Stats",
+        "emoji_name": "fl_stats",
         "fallback": "📊",
         "value": (
             "`/serverstats setup` — Create live member/bot/link channels\n"
@@ -250,6 +258,7 @@ HELP_SECTIONS = [
     {
         "key": "general",
         "title": "General",
+        "emoji_name": "fl_star",
         "fallback": "⭐",
         "value": (
             "`/ping` `/help` `/time` `/report`\n"
@@ -261,12 +270,14 @@ HELP_SECTIONS = [
     {
         "key": "voice",
         "title": "Voice",
+        "emoji_name": "fl_voice",
         "fallback": "🎙️",
         "value": "`/voicepanel setup` — Join-to-Create voice system",
     },
     {
         "key": "resources",
         "title": "Resources",
+        "emoji_name": None,
         "fallback": "📦",
         "value": (
             "`/resource submit` — Propose a resource (script/bot/plugin...)\n"
@@ -278,6 +289,7 @@ HELP_SECTIONS = [
     {
         "key": "announcements",
         "title": "Announcements",
+        "emoji_name": "fl_announcement",
         "fallback": "📢",
         "value": (
             "`/say` — Send a message/embed as the bot, or DM a role\n"
@@ -287,69 +299,92 @@ HELP_SECTIONS = [
 ]
 
 
-def _section_icon() -> str:
-    """One consistent, single-color icon for every section. Uses a real,
-    standard Unicode emoji (not emoji_loader) because a missing/invalid
-    custom emoji here breaks the ENTIRE select menu (Discord rejects all
-    options at once with 'Invalid emoji' if even one is malformed).
+def _section_emoji_obj(section: dict):
+    """Emoji object for use inside a SelectOption (emoji=...). Falls back
+    to the section's plain Unicode emoji if the custom Application Emoji
+    isn't loaded yet (or isn't mapped) — never returns something invalid,
+    since a bad emoji on ANY option breaks the whole select menu."""
+    name = section.get("emoji_name")
+    if name:
+        obj = emoji_loader.get_obj(name)
+        if obj:
+            return obj
+    return section["fallback"]
 
-    NOTE: plain geometric shapes like '▸' are NOT always accepted by
-    Discord's emoji validation for SelectOption — using a real emoji
-    codepoint avoids that edge case entirely.
-    """
-    return "🔹"
+
+def _section_emoji_str(section: dict) -> str:
+    """Emoji as printable text, for use inside a TextDisplay / markdown
+    body (e.g. '<:fl_home:123...>'). Falls back to the Unicode emoji."""
+    name = section.get("emoji_name")
+    if name:
+        text = emoji_loader.get(name)
+        if text:
+            return text
+    return section["fallback"]
 
 
 class HelpSelect(discord.ui.Select):
-    def __init__(self):
-        icon = _section_icon()
+    def __init__(self, active_key: str | None = None):
         options = [
             discord.SelectOption(
                 label=section["title"],
                 value=section["key"],
-                emoji=icon,
+                emoji=_section_emoji_obj(section),
+                default=(section["key"] == active_key),
             )
             for section in HELP_SECTIONS
         ]
-        super().__init__(placeholder="📚 اختار قسم الأوامر...", options=options)
+        super().__init__(
+            placeholder="📚 اختار قسم الأوامر...",
+            options=options,
+            custom_id="help_section_select",
+        )
 
     async def callback(self, interaction: discord.Interaction):
-        section = next(s for s in HELP_SECTIONS if s["key"] == self.values[0])
-        icon = _section_icon()
-        embed = discord.Embed(
-            title=f"{section['title']}",
-            description=section["value"],
-            color=config.EMBED_COLOR,
-            timestamp=datetime.now(),
-        )
-        embed.set_footer(text=f"{config.BOT_NAME} | Dev: {config.DEVELOPER}")
-        await interaction.response.edit_message(embed=embed, view=self.view)
+        await interaction.response.edit_message(view=HelpLayoutView(active_key=self.values[0]))
 
 
-class HelpView(discord.ui.View):
-    def __init__(self):
+class HelpLayoutView(discord.ui.LayoutView):
+    """Components V2 card — same visual language as the apply panel
+    (Container + TextDisplay + Separator + Section w/ thumbnail accessory),
+    instead of a classic embed."""
+
+    def __init__(self, active_key: str | None = None):
         super().__init__(timeout=180)
-        self.add_item(HelpSelect())
+
+        section = next((s for s in HELP_SECTIONS if s["key"] == active_key), None)
+
+        header_text = (
+            f"# 📚 {config.BOT_NAME} — Commands\n"
+            f"**{config.SERVER_NAME}** | Developer: **{config.DEVELOPER}**"
+        )
+        header_section = discord.ui.Section(
+            discord.ui.TextDisplay(header_text),
+            accessory=discord.ui.Thumbnail(media=bot.user.display_avatar.url),
+        )
+
+        if section:
+            body_text = f"## {_section_emoji_str(section)} {section['title']}\n{section['value']}"
+        else:
+            body_text = "اختار قسم من المنيو تحت باش تشوف الأوامر ديالو 👇"
+
+        footer_text = f"-# {config.BOT_NAME} | Dev: {config.DEVELOPER}"
+
+        items = [
+            header_section,
+            discord.ui.Separator(),
+            discord.ui.TextDisplay(body_text),
+            discord.ui.Separator(),
+            discord.ui.ActionRow(HelpSelect(active_key=active_key)),
+            discord.ui.TextDisplay(footer_text),
+        ]
+        container = discord.ui.Container(*items, accent_color=config.EMBED_COLOR)
+        self.add_item(container)
 
 
 @bot.tree.command(name="help", description="📚 List all bot commands")
 async def help_cmd(interaction: discord.Interaction):
-    embed = discord.Embed(
-        title=f"📚 {config.BOT_NAME} — Commands",
-        description=(
-            f"**{config.SERVER_NAME}** | Developer: **{config.DEVELOPER}**\n"
-            f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-            f"اختار قسم من المنيو تحت باش تشوف الأوامر ديالو 👇"
-        ),
-        color=config.EMBED_COLOR,
-        timestamp=datetime.now(),
-    )
-    embed.set_thumbnail(url=bot.user.display_avatar.url)
-    embed.set_footer(
-        text=f"{config.BOT_NAME} | Dev: {config.DEVELOPER}",
-        icon_url=bot.user.display_avatar.url,
-    )
-    await interaction.response.send_message(embed=embed, view=HelpView())
+    await interaction.response.send_message(view=HelpLayoutView())
 
 
 @bot.tree.command(name="report", description="🚨 Report a member")
