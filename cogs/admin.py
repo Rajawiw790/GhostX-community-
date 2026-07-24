@@ -11,7 +11,7 @@ Slash commands, each with a matching text shortcut (no slash needed):
   /unlock   -> unlockih
   /clear    -> cls / clr [amount]
 
-Also: /unban, /nickname, /warnings (view/clear), /nuke, /slowmode, /role.
+Also: /unban, /nickname, /nuke, /slowmode, /role.
 
 Slash commands and text shortcuts both call the same internal _do_* methods,
 so the moderation logic (hierarchy checks, DMs, permission handling) only
@@ -274,39 +274,6 @@ class Admin(commands.Cog):
     async def warn(self, interaction: discord.Interaction, member: discord.Member, reason: str):
         result = await self._do_warn(interaction.user, member, reason)
         await interaction.response.send_message(result)
-
-    warnings_group = app_commands.Group(
-        name="warnings",
-        description="View or clear a member's warning history",
-        default_permissions=discord.Permissions(moderate_members=True),
-    )
-
-    @warnings_group.command(name="view", description="Show a member's warning history")
-    @app_commands.describe(member="The member to check")
-    async def warnings_view(self, interaction: discord.Interaction, member: discord.Member):
-        entries = load_warnings().get(str(interaction.guild_id), {}).get(str(member.id), [])
-        if not entries:
-            await interaction.response.send_message(f"{EMOJI['warnings']} {member.mention} has no warnings.", ephemeral=True)
-            return
-        lines = []
-        for i, w in enumerate(entries[-10:], 1):
-            by = interaction.guild.get_member(w["by"])
-            when = datetime.fromtimestamp(w["at"]).strftime("%Y-%m-%d")
-            lines.append(f"{i}. {w['reason']} — by {by.mention if by else w['by']} ({when})")
-        header = f"{EMOJI['warnings']} **Warnings — {member.display_name} ({len(entries)} total)**"
-        await interaction.response.send_message(f"{header}\n" + "\n".join(lines), ephemeral=True)
-
-    @warnings_group.command(name="clear", description="Clear a member's warning history")
-    @app_commands.describe(member="The member to clear")
-    async def warnings_clear(self, interaction: discord.Interaction, member: discord.Member):
-        data = load_warnings()
-        gid = str(interaction.guild_id)
-        if gid in data and str(member.id) in data[gid]:
-            data[gid].pop(str(member.id))
-            save_warnings(data)
-        await interaction.response.send_message(
-            f"{EMOJI['success']} Cleared warnings for {member.mention}.", ephemeral=True
-        )
 
     @app_commands.command(name="mute", description="Timeout (mute) a member")
     @app_commands.describe(member="Member to mute", duration="Duration in minutes", reason="Reason for the mute")
