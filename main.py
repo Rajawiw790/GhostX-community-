@@ -336,7 +336,7 @@ class HelpSelect(discord.ui.Select):
             for section in HELP_SECTIONS
         ]
         super().__init__(
-            placeholder="<:11569crayon:1530119885621952543> اختار قسم الأوامر...",
+            placeholder=" Command list...",
             options=options,
             custom_id="help_section_select",
         )
