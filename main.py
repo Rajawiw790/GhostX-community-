@@ -186,7 +186,7 @@ HELP_SECTIONS = [
         "key": "admin",
         "title": "Administration",
         "emoji": "<:40528administrateur:1530120051674320946>",
-        "description": "أوامر الإشراف: حظر، طرد، كتم، تحذير وإدارة الرتب",
+        "description": "أوامر إشراف كاملة: حظر، طرد، كتم، تحذير، مسح الرسائل، قفل/فتح الروم وإدارة الرتب بشكل احترافي",
         "value": (
             "› `/ban` `/kick` — طرد أو حذف عضو\n"
             "› `/mute` `/unmute` — كتم أو رفع الكتم\n"
@@ -201,7 +201,7 @@ HELP_SECTIONS = [
         "key": "tickets",
         "title": "Tickets",
         "emoji": "<:29909ticket:1530120009961967636>",
-        "description": "نظام التذاكر الكامل: إعداد، تعديل وإدارة الطلبات",
+        "description": "نظام تذاكر متكامل: تفعيل، تعديل، إلغاء، إضافة أعضاء وإغلاق التذاكر بسهولة تامة",
         "value": (
             "› `/ticket setup` — تفعيل نظام التذاكر\n"
             "› `/ticket update` — تعديل الإعدادات\n"
@@ -214,7 +214,7 @@ HELP_SECTIONS = [
         "key": "welcome",
         "title": "Welcome, Boost & Subscribe",
         "emoji": "<:11757home:1530119888385871872>",
-        "description": "رسائل الترحيب، تفعيلات البوست والاشتراكات",
+        "description": "رسائل ترحيب مخصصة، إشعارات البوست وتفعيل الاشتراكات مع معاينة مباشرة قبل النشر",
         "value": (
             "› `/welcome setup` `/welcome update` `/welcome remove`\n"
             "› `/welcome preview` `/welcome info`\n"
@@ -226,7 +226,7 @@ HELP_SECTIONS = [
         "key": "applications",
         "title": "Applications",
         "emoji": "<:32535applicationapprivedids:1530120012654968872>",
-        "description": "طلبات الانضمام لفريق الـ Staff أو الـ Whitelist",
+        "description": "استقبل ودقق طلبات الانضمام لفريق الـ Staff أو قائمة الـ Whitelist بخطوات واضحة",
         "value": (
             "› `/setup apply` — طلبات Staff / Whitelist\n"
             "› `/setup guide` — دليل إعداد البوت الكامل"
@@ -236,7 +236,7 @@ HELP_SECTIONS = [
         "key": "music",
         "title": "Music",
         "emoji": "<:5356spotifymusicdisc:1530119807624679494>",
-        "description": "تشغيل وإدارة الموسيقى داخل الروم الصوتي",
+        "description": "شغّل الأغاني، تحكم بالصوت، رتب القائمة وتابع الأغنية الحالية في الروم الصوتي",
         "value": (
             "› `/play` — تشغيل أو إضافة أغنية\n"
             "› `/skip` `/stop` — تخطي أو إيقاف\n"
@@ -250,7 +250,7 @@ HELP_SECTIONS = [
         "key": "emojis",
         "title": "Emojis",
         "emoji": "<:10043manface:1530119878168809632>",
-        "description": "نسخ وإدارة الإيموجيات من أي سيرفر لسيرفرك",
+        "description": "انسخ إيموجي واحد أو كل إيموجيات سيرفر آخر، أو ارفع ZIP كامل بضغطة واحدة",
         "value": (
             "› `/emoji steal` — نسخ إيموجي واحد\n"
             "› `/emoji stealall` — نسخ كل إيموجيات سيرفر آخر\n"
@@ -262,7 +262,7 @@ HELP_SECTIONS = [
         "key": "ai",
         "title": "AI",
         "emoji": "<:95805bot:1530120267605737562>",
-        "description": "تحدث مباشرة مع الذكاء الاصطناعي داخل السيرفر",
+        "description": "اسأل الذكاء الاصطناعي أي سؤال واحصل على جواب فوري داخل السيرفر مباشرة",
         "value": (
             "› `/ai ask` — اسأل الـ AI أي سؤال\n"
             "› `/ai clear` — امسح سجل محادثتك"
@@ -272,7 +272,7 @@ HELP_SECTIONS = [
         "key": "stats",
         "title": "Server Stats",
         "emoji": "<:41378statistiques:1530120054715453570>",
-        "description": "رومات إحصائيات حية تتحدث تلقائياً",
+        "description": "رومات تعرض عدد الأعضاء والإحصائيات بشكل حي وتتحدث تلقائياً بدون تدخل يدوي",
         "value": (
             "› `/serverstats setup` — إنشاء رومات إحصائيات حية\n"
             "› `/serverstats update` — تحديث فوري\n"
@@ -283,7 +283,7 @@ HELP_SECTIONS = [
         "key": "general",
         "title": "General",
         "emoji": "<:9275yellowstar:1530119868903460955>",
-        "description": "أوامر عامة: البروفايل، الرصيد والرتب التلقائية",
+        "description": "بروفايلك، رصيدك، مكافأة يومية، رتب بالرياكشن ورتب تلقائية من قائمة اختيار",
         "value": (
             "› `/ping` `/help` `/time` `/report`\n"
             "› `/profile` `/random` `/top` `/daily` `/balance`\n"
@@ -295,14 +295,14 @@ HELP_SECTIONS = [
         "key": "voice",
         "title": "Voice",
         "emoji": "<:15830voicechannelgreenalt:1530119939153989773>",
-        "description": "نظام الرومات الصوتية Join-to-Create",
+        "description": "أنشئ نظام Join-to-Create يخلي كل عضو يصنع الروم الصوتي ديالو تلقائياً",
         "value": "› `/voicepanel setup` — نظام Join-to-Create الصوتي",
     },
     {
         "key": "resources",
         "title": "Resources",
         "emoji": "<:90665shoppingcart:1530120251616792626>",
-        "description": "اقتراح ومراجعة الموارد: سكريبتات، بوتات وبلوگينات",
+        "description": "اقترح سكريبت أو بوت أو بلوگين، وتابع مراجعته ونشره في الكاتيغوري المناسبة",
         "value": (
             "› `/resource submit` — اقترح مورد (سكريبت/بوت/بلوگين...)\n"
             "› `/resource list` `/resource search`\n"
@@ -314,7 +314,7 @@ HELP_SECTIONS = [
         "key": "announcements",
         "title": "Announcements",
         "emoji": "<:6619megaphone:1530119828747190373>",
-        "description": "إرسال إعلانات ورسائل خاصة لأعضاء رتبة معينة",
+        "description": "أرسل إعلان أو embed باسم البوت، أو رسالة خاصة لكل أعضاء رتبة معينة",
         "value": (
             "› `/say` — إرسال رسالة/embed باسم البوت، أو DM لرتبة\n"
             "› `/notify` — DM لكل أعضاء رتبة معينة"
@@ -356,7 +356,7 @@ class HelpLayoutView(discord.ui.LayoutView):
         section = next((s for s in HELP_SECTIONS if s["key"] == active_key), None)
 
         header_text = (
-            f"**📚 {config.BOT_NAME} — Commands**\n"
+            f"**<:5152modernrules:1530119799990911006> {config.BOT_NAME} — Commands**\n"
             f"-# {config.SERVER_NAME} | Developer: {config.DEVELOPER}"
         )
         header_section = discord.ui.Section(
@@ -367,7 +367,7 @@ class HelpLayoutView(discord.ui.LayoutView):
         if section:
             body_text = f"**{section['emoji']} {section['title']}**\n{section['value']}"
         else:
-            body_text = "اختار قسم من المنيو تحت باش تشوف الأوامر ديالو 👇"
+            body_text = "اختار قسم من المنيو تحت باش تشوف الأوامر ديالو <:fl_arrow_yellow:1528968893031514262>"
 
         footer_text = f"-# {config.BOT_NAME} | Dev: {config.DEVELOPER}"
 
