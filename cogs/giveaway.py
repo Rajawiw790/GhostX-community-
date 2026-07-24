@@ -11,6 +11,17 @@ import random
 import re
 from datetime import datetime, timedelta
 
+# ─── custom emojis (uploaded by ghostx_1x on the FastLife/Ghostx server) ───
+EMOJI = {
+    "gift": "<:giftingchampion:1530120392583282689>",
+    "enter": "<:giftingicon:1530120373780086856>",
+    "winner": "<:crown:1530120285989244978>",
+    "reroll": "<:refresh:1530119860732956813>",
+    "success": "<:squarecheckmark:1530119784878964786>",
+    "error": "<:x:1530119812515106928>",
+    "warning": "<:warning:1530119891326079118>",
+}
+
 
 def parse_duration(duration: str) -> int:
     """
@@ -41,13 +52,23 @@ def format_duration(seconds: int) -> str:
     return " و".join(parts) if parts else "0 ثانية"
 
 
+def _msg(emoji: str, title: str, **fields) -> str:
+    """Consistent plain-text response layout: emoji + bold title, then fields."""
+    lines = [f"{emoji} **{title}**"]
+    for label, value in fields.items():
+        if value is not None:
+            lines.append(f"› **{label}:** {value}")
+    return "\n".join(lines)
+
+
 # ══════════════════════════════════════════════════════════════════════════
 #  Giveaway card — Components V2 (Container), same design language as the
-#  apply panel: title + details + optional banner + Section(footer, button).
+#  apply panel: title + description + details + optional banner + Section(footer, button).
 # ══════════════════════════════════════════════════════════════════════════
 class GiveawayCardView(discord.ui.LayoutView):
     def __init__(self, giveaway_id: int, prize: str, end_time: datetime, winners_count: int,
-                 banner_url: str = None, footer_text: str = None, participants: set = None):
+                 banner_url: str = None, footer_text: str = None, description: str = None,
+                 participants: set = None):
         super().__init__(timeout=None)
         self.giveaway_id = giveaway_id
         self.prize = prize
@@ -55,23 +76,25 @@ class GiveawayCardView(discord.ui.LayoutView):
         self.winners_count = winners_count
         self.banner_url = banner_url
         self.footer_text = footer_text or "Good luck to everyone!"
+        self.description = description
         self.participants = participants if participants is not None else set()
         self._build()
 
     def _build(self, *, ended: bool = False, decision_text: str = None, accent: int = None):
         self.clear_items()
 
-        header = f"# {self.prize}"
+        header = f"# {EMOJI['gift']} {self.prize}"
         details = (
             f"**Winners :** {self.winners_count}\n"
             f"**Ends :** <t:{int(self.end_time.timestamp())}:R> (<t:{int(self.end_time.timestamp())}:F>)\n"
             f"**Participants :** {len(self.participants)}"
         )
 
-        items = [
-            discord.ui.TextDisplay(header),
-            discord.ui.TextDisplay(details),
-        ]
+        items = [discord.ui.TextDisplay(header)]
+        if self.description:
+            items.append(discord.ui.TextDisplay(self.description))
+        items.append(discord.ui.TextDisplay(details))
+
         if self.banner_url:
             items.append(discord.ui.Separator())
             items.append(discord.ui.MediaGallery(discord.MediaGalleryItem(self.banner_url)))
@@ -94,22 +117,19 @@ class GiveawayCardView(discord.ui.LayoutView):
 
     async def on_enter(self, interaction: discord.Interaction):
         if interaction.user.bot:
-            await interaction.response.send_message("البوتات لا يمكنها المشاركة.", ephemeral=True)
+            await interaction.response.send_message(f"{EMOJI['error']} البوتات لا يمكنها المشاركة.", ephemeral=True)
             return
         if interaction.user.id in self.participants:
-            await interaction.response.send_message("أنت مشارك بالفعل.", ephemeral=True)
+            await interaction.response.send_message(f"{EMOJI['warning']} أنت مشارك بالفعل.", ephemeral=True)
             return
 
         self.participants.add(interaction.user.id)
         self._build()
 
-        embed = discord.Embed(
-            title="تم دخول السحب",
-            description=f"أنت مشارك الآن.\nعدد المشاركين: **{len(self.participants)}**",
-            color=config.SUCCESS_COLOR
+        await interaction.response.send_message(
+            _msg(EMOJI["enter"], "تم دخول السحب", **{"عدد المشاركين": str(len(self.participants))}),
+            ephemeral=True,
         )
-        embed.set_footer(text=config.BOT_NAME)
-        await interaction.response.send_message(embed=embed, ephemeral=True)
         await interaction.message.edit(view=self)
 
     def mark_ended(self, decision_text: str, accent: int):
@@ -128,7 +148,8 @@ class Giveaway(commands.Cog):
         winners="عدد الفائزين",
         channel="الروم (اختياري)",
         banner_url="رابط صورة بانر (اختياري)",
-        footer_text="رسالة تبان جنب الزر (اختياري)"
+        footer_text="رسالة تبان جنب الزر (اختياري)",
+        description="وصف أو تفاصيل زايدة تبان فوق الكارط (اختياري)",
     )
     @app_commands.default_permissions(administrator=True)
     async def giveaway_start(
@@ -140,18 +161,19 @@ class Giveaway(commands.Cog):
         channel: discord.TextChannel = None,
         banner_url: str = None,
         footer_text: str = None,
+        description: str = None,
     ):
         try:
             duration_seconds = parse_duration(duration)
         except ValueError:
             await interaction.response.send_message(
-                "صيغة المدة غير صحيحة. استعمل مثال: 30s أو 10m أو 2h أو 1d",
+                f"{EMOJI['error']} صيغة المدة غير صحيحة. استعمل مثال: 30s أو 10m أو 2h أو 1d",
                 ephemeral=True
             )
             return
 
         if duration_seconds <= 0:
-            await interaction.response.send_message("المدة خاصها تكون أكبر من صفر.", ephemeral=True)
+            await interaction.response.send_message(f"{EMOJI['error']} المدة خاصها تكون أكبر من صفر.", ephemeral=True)
             return
 
         if channel is None:
@@ -167,6 +189,7 @@ class Giveaway(commands.Cog):
             winners_count=winners,
             banner_url=banner_url,
             footer_text=footer_text,
+            description=description,
         )
         message = await channel.send(view=view)
 
@@ -180,7 +203,10 @@ class Giveaway(commands.Cog):
         }
 
         await interaction.response.send_message(
-            f"تم بدء السحب في {channel.mention}\nالجائزة: **{prize}**\nالمدة: {format_duration(duration_seconds)}",
+            _msg(
+                EMOJI["gift"], "تم بدء السحب",
+                **{"الروم": channel.mention, "الجائزة": prize, "المدة": format_duration(duration_seconds)},
+            ),
             ephemeral=True
         )
 
@@ -205,7 +231,7 @@ class Giveaway(commands.Cog):
         participants = list(view.participants)
 
         if len(participants) < giveaway['winners']:
-            view.mark_ended("عدد المشاركين غير كافي.", accent=config.ERROR_COLOR)
+            view.mark_ended(f"{EMOJI['warning']} عدد المشاركين غير كافي.", accent=config.ERROR_COLOR)
             await message.edit(view=view)
             del self.active_giveaways[message_id]
             return
@@ -213,13 +239,12 @@ class Giveaway(commands.Cog):
         winners_ids = random.sample(participants, min(giveaway['winners'], len(participants)))
         winners_mentions = [f"<@{w}>" for w in winners_ids]
 
-        decision_text = f"**الفائزون :**\n{chr(10).join(winners_mentions)}\n\nمبروك للفائزين!"
+        decision_text = f"{EMOJI['winner']} **الفائزون :**\n{chr(10).join(winners_mentions)}\n\nمبروك للفائزين!"
         view.mark_ended(decision_text, accent=config.SUCCESS_COLOR)
         await message.edit(view=view)
 
         await channel.send(
-            f"Winner! {', '.join(winners_mentions)}\n"
-            f"prize **{giveaway['prize']}**!"
+            _msg(EMOJI["winner"], "Winner!", **{"الفائزون": ", ".join(winners_mentions), "الجائزة": giveaway['prize']})
         )
 
         del self.active_giveaways[message_id]
@@ -231,16 +256,18 @@ class Giveaway(commands.Cog):
         try:
             await interaction.channel.fetch_message(int(message_id))
         except Exception:
-            await interaction.response.send_message("لم يتم العثور على الرسالة.", ephemeral=True)
+            await interaction.response.send_message(f"{EMOJI['error']} لم يتم العثور على الرسالة.", ephemeral=True)
             return
 
         members = [m for m in interaction.guild.members if not m.bot]
         if not members:
-            await interaction.response.send_message("لا يوجد أعضاء.", ephemeral=True)
+            await interaction.response.send_message(f"{EMOJI['error']} لا يوجد أعضاء.", ephemeral=True)
             return
 
         new_winner = random.choice(members)
-        await interaction.response.send_message(f"🔄 الفائز الجديد: {new_winner.mention}")
+        await interaction.response.send_message(
+            _msg(EMOJI["reroll"], "الفائز الجديد", **{"العضو": new_winner.mention})
+        )
 
 
 async def setup(bot):
