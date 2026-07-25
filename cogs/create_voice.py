@@ -15,6 +15,10 @@ Architecture (matches the screenshots):
                                    The control panel + the same Controls legend are
                                    posted immediately — there is no delay.
 
+  Note: Discord channel NAMES only support unicode emoji, not the custom
+  application emojis below — so channel names keep plain unicode, while every
+  embed/button uses the real Ghostx custom emojis.
+
 Admin commands:
   /voicepanel setup   — creates the category + channels (or re-posts the panel)
   /voicepanel info    — show current config + active rooms
@@ -56,6 +60,9 @@ EMOJI = {
     "transfer": "<:8997modernrefresh:1530119860732956813>",
     "waiting":  "<:fl_loading:1528968909913460841>",
     "delete":   "<:14385supprimer:1530119918660354139>",
+    "check":    "<:fl_check:1528968902837538846>",
+    "category": "<:64005web:1530120128849645748>",
+    "panel":    "<:62470logs:1530120119827566623>",
 }
 
 # (key, label, description) — the single source of truth for the legend shown
@@ -85,13 +92,13 @@ def _legend_text() -> str:
 
 
 def build_legend_embed() -> discord.Embed:
-    """The always-visible reference embed. Post this ONCE in the public
-    #voice-panel channel during /voicepanel setup, right next to the
+    """The always-visible reference embed. Posted ONCE in the public
+    #voice-panel channel during /voicepanel setup, right after the
     'Join to Create' embed — it stays there permanently, so members can read
     what every control does before they ever create a room."""
     embed = discord.Embed(
         title=f"{EMOJI['voice']} Voice Room Controls",
-        description="Create a room from the channel below and you'll get a private panel with these controls:",
+        description="Create a room from the channel above and you'll get a private panel with these controls:",
         color=0x5865F2,
     )
     embed.add_field(name="\u200b", value=_legend_text(), inline=False)
@@ -458,8 +465,8 @@ def _panel_embed(guild: discord.Guild, vc: discord.VoiceChannel, rd: dict) -> di
     )
     if owner:
         embed.set_thumbnail(url=owner.display_avatar.url)
-    embed.add_field(name="Owner",   value=owner.mention if owner else "—", inline=True)
-    embed.add_field(name="Status",  value=lock_icon, inline=True)
+    embed.add_field(name="Owner",      value=owner.mention if owner else "—", inline=True)
+    embed.add_field(name="Status",     value=lock_icon, inline=True)
     embed.add_field(name="Visibility", value=hide_icon, inline=True)
     embed.add_field(
         name=f"{EMOJI['members']} Members ({len(members_in)})",
@@ -471,8 +478,254 @@ def _panel_embed(guild: discord.Guild, vc: discord.VoiceChannel, rd: dict) -> di
     return embed
 
 
-# ─── VoicePanelGroup (slash commands) ──────────────────────
-# NOTE: this is where your file was cut off in the message you sent me —
-# I don't have the /voicepanel setup / info / remove commands, so I can't
-# edit them directly yet. Paste that part and I'll wire build_legend_embed()
-# into the public #voice-panel channel for you (see instructions below).
+# ─── VoicePanelGroup (slash commands) ────────────────────────────────────────
+
+class VoicePanelGroup(app_commands.Group):
+    def __init__(self, bot: commands.Bot):
+        super().__init__(
+            name="voicepanel",
+            description="Voice room system",
+            default_permissions=discord.Permissions(administrator=True),
+        )
+        self.bot = bot
+
+    @app_commands.command(name="setup", description="Set up the Join-to-Create voice system")
+    @app_commands.describe(
+        category       = "Category to create/use for voice rooms",
+        default_name   = "Default room name — use {user} as placeholder",
+        default_limit  = "Default user limit (0 = unlimited)",
+    )
+    async def setup(
+        self,
+        interaction: discord.Interaction,
+        category:      discord.CategoryChannel,
+        default_name:  str = "{user}'s Room",
+        default_limit: app_commands.Range[int, 0, 99] = 0,
+    ):
+        await interaction.response.defer(ephemeral=True)
+
+        guild = interaction.guild
+
+        # ── 1. create the public text channel for the panel ──
+        # (channel names only support unicode emoji, not custom application emojis)
+        panel_overwrites = {
+            guild.default_role: discord.PermissionOverwrite(view_channel=True, send_messages=False, read_message_history=True),
+            guild.me: discord.PermissionOverwrite(view_channel=True, send_messages=True, manage_channels=True, manage_messages=True),
+        }
+        try:
+            panel_text_ch = await guild.create_text_channel(
+                name="voice-panel",
+                category=category,
+                overwrites=panel_overwrites,
+                topic="Manage your voice room using the buttons below.",
+                reason="VoicePanel setup",
+            )
+        except Exception as e:
+            await interaction.followup.send(f"{EMOJI['ban']} Could not create panel channel: {e}", ephemeral=True); return
+
+        # ── 2. create the Join-to-Create VC ──
+        vc_overwrites = {
+            guild.default_role: discord.PermissionOverwrite(view_channel=True, connect=True),
+            guild.me:           discord.PermissionOverwrite(view_channel=True, connect=True, manage_channels=True, move_members=True),
+        }
+        try:
+            jtc_vc = await guild.create_voice_channel(
+                name="Create Voice",
+                category=category,
+                user_limit=0,
+                overwrites=vc_overwrites,
+                reason="VoicePanel JTC setup",
+            )
+        except Exception as e:
+            await interaction.followup.send(f"{EMOJI['ban']} Could not create JTC channel: {e}", ephemeral=True); return
+
+        # ── 3. post the join embed + the ALWAYS-VISIBLE controls legend ──
+        panel_embed = discord.Embed(
+            title=f"{EMOJI['voice']} Voice Room System",
+            description=(
+                f"Join **{jtc_vc.mention}** to instantly get your own **private voice room** "
+                "with full control.\n\nYour room is deleted automatically when empty."
+            ),
+            color=0x5865F2,
+            timestamp=datetime.now(),
+        )
+        panel_embed.set_author(
+            name=config.SERVER_NAME,
+            icon_url=guild.icon.url if guild.icon else None,
+        )
+        panel_embed.set_footer(text=f"{config.BOT_NAME} | Dev: {config.DEVELOPER}")
+        await panel_text_ch.send(embed=panel_embed)
+        # This legend stays here permanently — members can read what every
+        # control does before they've ever created a room.
+        await panel_text_ch.send(embed=build_legend_embed())
+
+        # ── 4. Save config ──
+        set_cfg(interaction.guild_id, {
+            "jtc_vc_id":      jtc_vc.id,
+            "category_id":    category.id,
+            "panel_text_id":  panel_text_ch.id,
+            "default_name":   default_name,
+            "default_limit":  default_limit,
+            "rooms":          {},
+        })
+
+        confirm = discord.Embed(title=f"{EMOJI['check']} Voice Panel Ready", color=0x57F287)
+        confirm.add_field(name="Panel Channel", value=panel_text_ch.mention, inline=True)
+        confirm.add_field(name="JTC Channel",   value=jtc_vc.mention,        inline=True)
+        confirm.add_field(name="Category",      value=category.name,         inline=True)
+        confirm.add_field(name="Default Name",  value=f"`{default_name}`",   inline=True)
+        confirm.set_footer(text=f"{config.BOT_NAME} | Dev: {config.DEVELOPER}")
+        await interaction.followup.send(embed=confirm, ephemeral=True)
+
+    @app_commands.command(name="info", description="Show voice panel config and active rooms")
+    async def info(self, interaction: discord.Interaction):
+        cfg = get_cfg(interaction.guild_id)
+        if not cfg:
+            await interaction.response.send_message(f"{EMOJI['ban']} Voice panel not configured.", ephemeral=True); return
+        jtc    = interaction.guild.get_channel(cfg.get("jtc_vc_id",     0))
+        txt    = interaction.guild.get_channel(cfg.get("panel_text_id", 0))
+        cat    = interaction.guild.get_channel(cfg.get("category_id",   0))
+        rooms  = all_rooms(interaction.guild_id)
+        active = sum(1 for vid in rooms if interaction.guild.get_channel(int(vid)))
+        embed = discord.Embed(title=f"{EMOJI['voice']} Voice Panel — Info", color=0x5865F2)
+        embed.add_field(name="Panel",     value=txt.mention if txt else "—", inline=True)
+        embed.add_field(name="JTC VC",    value=jtc.mention if jtc else "—", inline=True)
+        embed.add_field(name="Category",  value=cat.name if cat else "—", inline=True)
+        embed.add_field(name="Def. Name", value=f"`{cfg.get('default_name','—')}`", inline=True)
+        embed.add_field(name="Active Rooms", value=str(active), inline=True)
+        embed.set_footer(text=f"{config.BOT_NAME} | Dev: {config.DEVELOPER}")
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
+    @app_commands.command(name="remove", description="Disable the voice panel system")
+    async def remove(self, interaction: discord.Interaction):
+        d = _load(); d.pop(str(interaction.guild_id), None); _save(d)
+        await interaction.response.send_message(
+            embed=discord.Embed(description=f"{EMOJI['check']} Voice panel system disabled.", color=0x57F287),
+            ephemeral=True,
+        )
+
+
+# ─── Cog ─────────────────────────────────────────────────────────────────────
+
+class CreateVoice(commands.Cog):
+    def __init__(self, bot: commands.Bot):
+        self.bot = bot
+        self._group = VoicePanelGroup(bot)
+        bot.tree.add_command(self._group)
+
+    async def cog_unload(self):
+        self.bot.tree.remove_command("voicepanel")
+
+    # ── Join-to-Create listener ───────────────────────────────────────────────
+    @commands.Cog.listener()
+    async def on_voice_state_update(
+        self,
+        member: discord.Member,
+        before: discord.VoiceState,
+        after:  discord.VoiceState,
+    ):
+        cfg = get_cfg(member.guild.id)
+        if not cfg:
+            return
+
+        jtc_id = cfg.get("jtc_vc_id")
+
+        # ── Member joined the JTC channel ────────────────────────────────────
+        if after.channel and after.channel.id == jtc_id:
+            await self._create_room(member, cfg)
+
+        # ── Member left a managed room — check if empty ───────────────────────
+        if before.channel and before.channel.id != jtc_id:
+            rd = get_room(member.guild.id, before.channel.id)
+            if rd and len(before.channel.members) == 0:
+                await asyncio.sleep(3)
+                vc = member.guild.get_channel(before.channel.id)
+                if vc and len(vc.members) == 0:
+                    await self._destroy_room(member.guild, before.channel.id, rd)
+
+    async def _create_room(self, member: discord.Member, cfg: dict):
+        guild = member.guild
+        cat   = guild.get_channel(cfg.get("category_id"))
+
+        # One room per member
+        rooms = all_rooms(guild.id)
+        for vid, rd in rooms.items():
+            if rd["owner_id"] == member.id and guild.get_channel(int(vid)):
+                try:
+                    await member.move_to(guild.get_channel(int(vid)))
+                except Exception:
+                    pass
+                return
+
+        name          = cfg.get("default_name", "{user}'s Room").replace("{user}", member.display_name)
+        default_limit = cfg.get("default_limit", 0)
+
+        # ── Create the voice channel ──
+        vc_ow = {
+            guild.default_role: discord.PermissionOverwrite(connect=True, view_channel=True),
+            member:             discord.PermissionOverwrite(connect=True, view_channel=True, manage_channels=True, move_members=True),
+            guild.me:           discord.PermissionOverwrite(connect=True, view_channel=True, manage_channels=True, move_members=True),
+        }
+        try:
+            vc = await guild.create_voice_channel(
+                name=name, category=cat, user_limit=default_limit,
+                overwrites=vc_ow, reason=f"Temp VC for {member}"
+            )
+        except Exception as e:
+            print(f"[CreateVoice] VC create failed: {e}"); return
+
+        # Move member in
+        try:
+            await member.move_to(vc)
+        except Exception:
+            pass
+
+        # ── Create the private panel text channel ──
+        txt_ow = {
+            guild.default_role: discord.PermissionOverwrite(view_channel=False),
+            member:             discord.PermissionOverwrite(view_channel=True, send_messages=False, read_message_history=True),
+            guild.me:           discord.PermissionOverwrite(view_channel=True, send_messages=True, manage_channels=True),
+        }
+        try:
+            panel_ch = await guild.create_text_channel(
+                name="panel-room",
+                category=cat,
+                overwrites=txt_ow,
+                reason=f"Private panel for {member}",
+            )
+        except Exception as e:
+            print(f"[CreateVoice] Panel channel create failed: {e}")
+            panel_ch = None
+
+        # Seed room data (panel_ch_id=0 fallback if creation failed)
+        rd_seed = {"owner_id": member.id, "locked": False, "hidden": False, "banned": [], "permitted": [],
+                   "panel_ch_id": panel_ch.id if panel_ch else 0, "panel_msg_id": 0}
+        add_room(guild.id, vc.id, member.id, panel_ch.id if panel_ch else 0, 0)
+
+        if panel_ch:
+            view  = VoiceControlView(vc_id=vc.id, owner_id=member.id, guild_id=guild.id)
+            embed = _panel_embed(guild, vc, rd_seed)
+            try:
+                msg = await panel_ch.send(
+                    content=member.mention,
+                    embed=embed,
+                    view=view,
+                )
+                upd_room(guild.id, vc.id, panel_msg_id=msg.id)
+            except Exception as e:
+                print(f"[CreateVoice] Panel msg failed: {e}")
+
+    async def _destroy_room(self, guild: discord.Guild, vc_id: int, rd: dict):
+        vc = guild.get_channel(vc_id)
+        if vc:
+            try: await vc.delete(reason="Temp VC: empty, auto-deleted")
+            except Exception: pass
+        panel_ch = guild.get_channel(rd.get("panel_ch_id", 0))
+        if panel_ch:
+            try: await panel_ch.delete(reason="Voice room closed")
+            except Exception: pass
+        del_room(guild.id, vc_id)
+
+
+async def setup(bot: commands.Bot):
+    await bot.add_cog(CreateVoice(bot))
