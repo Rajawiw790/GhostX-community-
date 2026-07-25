@@ -73,6 +73,14 @@ DEFAULT_NOTICE_TEXT = (
     "permanent blacklist from the recruitment."
 )
 
+# Default message sent in DM before the whitelist interview starts.
+# Supports {kind_label}, {server}, {count}, {minutes} placeholders.
+DEFAULT_DM_INTRO_TEMPLATE = (
+    "📋 **{kind_label}** — {server}\n"
+    "I'll ask you {count} question(s) here, one at a time. Just reply "
+    "normally in this DM. You have {minutes} minutes to answer each one."
+)
+
 # How long (seconds) an applicant has to answer each DM question before the
 # interview times out.
 DM_QUESTION_TIMEOUT = 300  # 5 minutes
@@ -294,16 +302,22 @@ class DMChoiceView(discord.ui.View):
 async def _run_dm_interview(bot: commands.Bot, dm: discord.DMChannel, guild: discord.Guild,
                              user: discord.abc.User, kind: str, questions: list):
     """Runs entirely in the background (started as a task). Asks each question
-    as a plain DM message and waits for the applicant's reply."""
+    as a clearly boxed embed (Question X/N) and waits for the applicant's reply."""
     text_questions, legal_question = _split_legal_question(questions)
+    total = len(text_questions) + (1 if legal_question else 0)
     answers = []
 
     def check(m: discord.Message) -> bool:
         return m.author.id == user.id and m.channel.id == dm.id
 
+    def question_embed(idx: int, question_text: str) -> discord.Embed:
+        e = discord.Embed(description=f"**{question_text}**", color=config.EMBED_COLOR)
+        e.set_author(name=f"❓ Question {idx}/{total}")
+        return e
+
     try:
-        for q in text_questions:
-            await dm.send(f"**{q}**")
+        for idx, q in enumerate(text_questions, 1):
+            await dm.send(embed=question_embed(idx, q))
             msg = await bot.wait_for("message", check=check, timeout=DM_QUESTION_TIMEOUT)
             content = msg.content.strip() or "—"
             answers.append(content[:500])
@@ -311,7 +325,7 @@ async def _run_dm_interview(bot: commands.Bot, dm: discord.DMChannel, guild: dis
         full_questions = list(text_questions)
         if legal_question:
             view = DMChoiceView(user.id)
-            await dm.send(f"**{legal_question}**", view=view)
+            await dm.send(embed=question_embed(total, legal_question), view=view)
             await view.wait()
             if view.choice is None:
                 await dm.send("⌛ You took too long to answer. Please reapply from the server whenever you're ready.")
@@ -332,14 +346,23 @@ async def _run_dm_interview(bot: commands.Bot, dm: discord.DMChannel, guild: dis
         await dm.send(err)
 
 
-async def _start_dm_interview(interaction: discord.Interaction, kind: str, questions: list):
+async def _start_dm_interview(interaction: discord.Interaction, kind: str, questions: list, cfg: dict):
+    template = cfg.get("dm_intro_text") or DEFAULT_DM_INTRO_TEMPLATE
+    fmt_kwargs = {
+        "kind_label": KIND_LABELS.get(kind, kind.title()),
+        "server": interaction.guild.name,
+        "count": len(questions),
+        "minutes": DM_QUESTION_TIMEOUT // 60,
+    }
+    try:
+        intro_text = template.format(**fmt_kwargs)
+    except (KeyError, IndexError, ValueError):
+        # Admin used an unknown/broken placeholder — fall back to the default.
+        intro_text = DEFAULT_DM_INTRO_TEMPLATE.format(**fmt_kwargs)
+
     try:
         dm = await interaction.user.create_dm()
-        await dm.send(
-            f"📋 **{KIND_LABELS.get(kind, kind.title())}** — {interaction.guild.name}\n"
-            f"I'll ask you {len(questions)} question(s) here, one at a time. Just reply "
-            f"normally in this DM. You have {DM_QUESTION_TIMEOUT // 60} minutes to answer each one."
-        )
+        await dm.send(intro_text)
     except discord.Forbidden:
         await interaction.response.send_message(
             "❌ I can't DM you! Please enable direct messages from server members and try again.",
@@ -441,7 +464,7 @@ class ApplyButtonView(discord.ui.LayoutView):
 
         # Whitelist -> conversational DM interview instead of a modal popup.
         if self.kind == "whitelist":
-            await _start_dm_interview(interaction, self.kind, questions)
+            await _start_dm_interview(interaction, self.kind, questions, cfg)
             return
 
         # Staff -> unchanged modal flow.
@@ -738,6 +761,14 @@ class SetupApplyControlView(discord.ui.View):
             return
         await interaction.response.send_modal(ButtonModal(self.admin_id, session))
 
+    @discord.ui.button(label="Set DM Message", emoji="📨", style=discord.ButtonStyle.secondary)
+    async def set_dm_message(self, interaction: discord.Interaction, button: discord.ui.Button):
+        session = _sessions.get(self.admin_id)
+        if not session:
+            await interaction.response.send_message("⚠️ Session expired, run `/setup apply` again.", ephemeral=True)
+            return
+        await interaction.response.send_modal(DMMessageModal(self.admin_id, session))
+
     @discord.ui.button(label="Set Emoji", emoji="😀", style=discord.ButtonStyle.secondary)
     async def set_emoji(self, interaction: discord.Interaction, button: discord.ui.Button):
         session = _sessions.get(self.admin_id)
@@ -788,6 +819,7 @@ class SetupApplyControlView(discord.ui.View):
             "footer_text": session.get("footer_text", ""),
             "description": session.get("description", ""),
             "notice_text": session.get("notice_text", ""),
+            "dm_intro_text": session.get("dm_intro_text", ""),
             "title": title,
             "conditions": conditions,
             "questions": questions,
@@ -838,27 +870,34 @@ class QuestionsModal(discord.ui.Modal, title="❓ Set Application Questions"):
 
 
 class ConditionsModal(discord.ui.Modal, title="📋 Set Conditions"):
-    c1 = discord.ui.TextInput(label="Condition 1", max_length=200, required=True)
-    c2 = discord.ui.TextInput(label="Condition 2", max_length=200, required=True)
-    c3 = discord.ui.TextInput(label="Condition 3", max_length=200, required=False)
-    c4 = discord.ui.TextInput(label="Condition 4 (optional)", max_length=200, required=False)
-    c5 = discord.ui.TextInput(label="Condition 5 (optional)", max_length=200, required=False)
+    """One free-form textbox, one condition per line — add or remove as many
+    as you want (Discord modals can't have more than 5 separate fields, so
+    this is the way around that limit)."""
+    conditions_field = discord.ui.TextInput(
+        label="Conditions — one per line",
+        style=discord.TextStyle.paragraph,
+        placeholder=(
+            "You must be active in the community.\n"
+            "Good knowledge of server rules and etiquette.\n"
+            "Minimum age of 15 years old.\n"
+            "(add or remove lines freely)"
+        ),
+        max_length=4000,
+        required=True,
+    )
 
     def __init__(self, admin_id: int, current: list[str]):
         super().__init__()
         self.admin_id = admin_id
-        fields = [self.c1, self.c2, self.c3, self.c4, self.c5]
-        for i, field in enumerate(fields):
-            if i < len(current):
-                field.default = current[i]
+        self.conditions_field.default = "\n".join(current)
 
     async def on_submit(self, interaction: discord.Interaction):
-        conditions = [c.value for c in [self.c1, self.c2, self.c3, self.c4, self.c5] if c.value]
+        raw_lines = self.conditions_field.value.split("\n")
+        conditions = [line.strip() for line in raw_lines if line.strip()][:25]
         session = _sessions.setdefault(self.admin_id, {})
         session["conditions"] = conditions
         embed = discord.Embed(title="✅ Conditions Saved", color=config.SUCCESS_COLOR)
-        for i, c in enumerate(conditions, 1):
-            embed.add_field(name=f"📋 {i}", value=c, inline=False)
+        embed.description = "\n".join(f"{i}. {c}" for i, c in enumerate(conditions, 1)) or "(none)"
         embed.set_footer(text="Click Post Panel when you're ready.")
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
@@ -903,6 +942,36 @@ class TitleModal(discord.ui.Modal, title="📝 Set Title, Description & Notice")
         embed.add_field(name="Description", value=session["description"] or "(default)", inline=False)
         embed.add_field(name="Notice", value=session["notice_text"] or "(default)", inline=False)
         embed.set_footer(text="Click Post Panel when you're ready.")
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
+
+class DMMessageModal(discord.ui.Modal, title="📨 Set DM Intro Message"):
+    """Only used by the Whitelist (DM interview) flow — lets each server
+    have its own wording, since the intro message is sent before any
+    question is asked."""
+    message_field = discord.ui.TextInput(
+        label="Message sent in DM before questions",
+        style=discord.TextStyle.paragraph,
+        placeholder=(
+            "Welcome to {server}! I'll ask you {count} question(s) here, "
+            "one at a time. You have {minutes} minutes per question."
+        ),
+        max_length=1000,
+        required=False,
+    )
+
+    def __init__(self, admin_id: int, session: dict):
+        super().__init__()
+        self.admin_id = admin_id
+        self.message_field.default = session.get("dm_intro_text", "")
+
+    async def on_submit(self, interaction: discord.Interaction):
+        session = _sessions.setdefault(self.admin_id, {})
+        session["dm_intro_text"] = self.message_field.value.strip()
+
+        embed = discord.Embed(title="✅ DM Message Saved", color=config.SUCCESS_COLOR)
+        embed.description = session["dm_intro_text"] or "(default)"
+        embed.set_footer(text="Placeholders: {server} {count} {minutes} {kind_label}. Only used for Whitelist (DM flow).")
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
 
@@ -1031,6 +1100,7 @@ class ApplySystem(commands.Cog):
             "conditions": existing.get("conditions", []),
             "questions": existing.get("questions", []),
             "notice_text": existing.get("notice_text", ""),
+            "dm_intro_text": existing.get("dm_intro_text", ""),
             "description": existing.get("description", ""),
             "button_label": existing.get("button_label", ""),
             "button_emoji": existing.get("button_emoji", ""),
