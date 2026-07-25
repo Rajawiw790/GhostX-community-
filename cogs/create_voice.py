@@ -37,6 +37,16 @@ import db
 
 VOICE_COLLECTION = "create_voice"
 
+# Discord hard limit per embed field value. Anything at or above this raises
+# HTTPException 400 "Must be 1024 or fewer in length" and — critically —
+# raises it as an *exception*, which previously happened in the middle of
+# /voicepanel setup, right after the channels were created but BEFORE
+# set_cfg() ran. That meant the channels existed but the config was never
+# saved, so /voicepanel info reported "not configured" and joining the
+# Create Voice channel silently did nothing (on_voice_state_update found no
+# cfg and returned early).
+EMBED_FIELD_LIMIT = 1024
+
 # ─── Custom emojis (Ghostx application emojis) ──────────────────────────────
 # Centralized here so every embed/button in this file pulls from the same
 # source — change an ID once and it updates everywhere.
@@ -87,8 +97,36 @@ LEGEND = [
 ]
 
 
-def _legend_text() -> str:
-    return "\n".join(f"{EMOJI[key]} **{label}** — {desc}" for key, label, desc in LEGEND)
+def _legend_chunks() -> list[str]:
+    """Split the legend into chunks that each fit under Discord's 1024-char
+    embed field value limit. Splitting on whole lines (never mid-line) so
+    each control's icon/label/description always stays together."""
+    lines = [f"{EMOJI[key]} **{label}** — {desc}" for key, label, desc in LEGEND]
+    chunks: list[str] = []
+    current = ""
+    for line in lines:
+        candidate = f"{current}\n{line}" if current else line
+        if len(candidate) > EMBED_FIELD_LIMIT:
+            if current:
+                chunks.append(current)
+            current = line
+        else:
+            current = candidate
+    if current:
+        chunks.append(current)
+    return chunks
+
+
+def _add_legend_fields(embed: discord.Embed, first_field_name: str = "Controls") -> None:
+    """Adds the legend as one or more embed fields, each safely under the
+    1024-char limit. Use this instead of a single add_field(value=...) call
+    anywhere the legend is shown."""
+    for i, chunk in enumerate(_legend_chunks()):
+        embed.add_field(
+            name=first_field_name if i == 0 else "\u200b",
+            value=chunk,
+            inline=False,
+        )
 
 
 def build_legend_embed() -> discord.Embed:
@@ -101,7 +139,7 @@ def build_legend_embed() -> discord.Embed:
         description="Create a room from the channel above and you'll get a private panel with these controls:",
         color=0x5865F2,
     )
-    embed.add_field(name="\u200b", value=_legend_text(), inline=False)
+    _add_legend_fields(embed, first_field_name="\u200b")
     embed.set_footer(text=f"{config.BOT_NAME} | Dev: {config.DEVELOPER}")
     return embed
 
@@ -524,7 +562,9 @@ def _panel_embed(guild: discord.Guild, vc: discord.VoiceChannel, rd: dict) -> di
         value=" ".join(members_in) if members_in else "Empty",
         inline=False,
     )
-    embed.add_field(name="Controls", value=_legend_text(), inline=False)
+    # Was a single add_field(value=_legend_text()) call — same 1024-char
+    # overflow bug as the public legend embed. Now split across fields.
+    _add_legend_fields(embed, first_field_name="Controls")
     embed.set_footer(text=f"{config.BOT_NAME} | Channel ID: {vc.id if vc else '—'} | Dev: {config.DEVELOPER}")
     return embed
 
@@ -590,7 +630,26 @@ class VoicePanelGroup(app_commands.Group):
         except Exception as e:
             await interaction.followup.send(f"{EMOJI['ban']} Could not create JTC channel: {e}", ephemeral=True); return
 
-        # ── 3. post the join embed + the ALWAYS-VISIBLE controls legend ──
+        # ── 3. Save config FIRST ──
+        # Moved ahead of the embed posting below. Previously the config was
+        # saved LAST, after posting the join embed and the controls legend.
+        # The legend embed used to overflow Discord's 1024-char field limit
+        # and raise an HTTPException — which happened *after* the channels
+        # were created but *before* set_cfg() ran. Net result: channels
+        # existed, but the guild was never marked as configured, so joining
+        # the Create Voice channel silently did nothing. Saving config right
+        # after the channels exist means a cosmetic embed failure can never
+        # again leave the system half-configured.
+        set_cfg(interaction.guild_id, {
+            "jtc_vc_id":      jtc_vc.id,
+            "category_id":    category.id,
+            "panel_text_id":  panel_text_ch.id,
+            "default_name":   default_name,
+            "default_limit":  default_limit,
+            "rooms":          {},
+        })
+
+        # ── 4. post the join embed + the ALWAYS-VISIBLE controls legend ──
         panel_embed = discord.Embed(
             title=f"{EMOJI['voice']} Voice Room System",
             description=(
@@ -605,20 +664,18 @@ class VoicePanelGroup(app_commands.Group):
             icon_url=guild.icon.url if guild.icon else None,
         )
         panel_embed.set_footer(text=f"{config.BOT_NAME} | Dev: {config.DEVELOPER}")
-        await panel_text_ch.send(embed=panel_embed)
-        # This legend stays here permanently — members can read what every
-        # control does before they've ever created a room.
-        await panel_text_ch.send(embed=build_legend_embed())
-
-        # ── 4. Save config ──
-        set_cfg(interaction.guild_id, {
-            "jtc_vc_id":      jtc_vc.id,
-            "category_id":    category.id,
-            "panel_text_id":  panel_text_ch.id,
-            "default_name":   default_name,
-            "default_limit":  default_limit,
-            "rooms":          {},
-        })
+        try:
+            await panel_text_ch.send(embed=panel_embed)
+            # This legend stays here permanently — members can read what every
+            # control does before they've ever created a room.
+            await panel_text_ch.send(embed=build_legend_embed())
+        except Exception as e:
+            # Config is already saved at this point, so the system still
+            # works even if posting these informational embeds fails.
+            await interaction.followup.send(
+                f"{EMOJI['ban']} Setup finished and is active, but posting the panel message failed: {e}",
+                ephemeral=True,
+            )
 
         confirm = discord.Embed(title=f"{EMOJI['check']} Voice Panel Ready", color=0x57F287)
         confirm.add_field(name="Panel Channel", value=panel_text_ch.mention, inline=True)
