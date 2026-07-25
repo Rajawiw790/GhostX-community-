@@ -1,28 +1,38 @@
 """
 Create Voice System — Ghostx Community
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-Architecture (matches the screenshots):
+Architecture (v2 — single shared panel):
 
   Category: Voice Rooms
-  ├── #voice-panel             ← text channel with the public "Join to Create" embed
-  │                              AND a permanent Controls legend (posted once at setup,
-  │                              stays there always — no need to create a room to see it)
-  └── ➕ Create Voice          ← join-to-create VC (permanent — bot recreates if deleted)
+  ├── #voice-panel             ← text channel with ONE persistent embed + the
+  │                              16-button control panel. Posted once by
+  │                              /voicepanel setup and never duplicated —
+  │                              re-running setup / customize edits this same
+  │                              message in place.
+  └── ➕ Create Voice          ← join-to-create VC (permanent — bot recreates
+                                  it if deleted)
 
-  When member joins ➕ Create Voice:
-  ├── {name}'s Room             ← temp voice channel (auto-deleted when empty)
-  └── panel • room (private)    ← private text channel, visible ONLY to the owner.
-                                   The control panel + the same Controls legend are
-                                   posted immediately — there is no delay.
+  When a member joins ➕ Create Voice:
+  └── {name}'s Room             ← temp voice channel (auto-deleted when empty)
+
+  There is NO private per-room text channel anymore. Every button on the
+  shared #voice-panel message is dynamic: when a member clicks it, the bot
+  looks at *that member's current voice channel* to figure out which room to
+  act on. So the panel only ever needs to exist in one place, and it works
+  the instant /voicepanel setup runs — no need to create a room first to see
+  it, and no per-room panel channel to create/clean up.
 
   Note: Discord channel NAMES only support unicode emoji, not the custom
   application emojis below — so channel names keep plain unicode, while every
   embed/button uses the real Ghostx custom emojis.
 
 Admin commands:
-  /voicepanel setup   — creates the category + channels (or re-posts the panel)
-  /voicepanel info    — show current config + active rooms
-  /voicepanel remove  — disable and clean up
+  /voicepanel setup      — creates the category + channels (or refreshes the
+                            panel in place if already configured)
+  /voicepanel customize   — edit the panel embed (title/description/image/
+                            thumbnail/footer/color) without touching channels
+  /voicepanel info        — show current config + active rooms
+  /voicepanel remove      — disable and clean up
 """
 
 import asyncio
@@ -36,16 +46,6 @@ import config
 import db
 
 VOICE_COLLECTION = "create_voice"
-
-# Discord hard limit per embed field value. Anything at or above this raises
-# HTTPException 400 "Must be 1024 or fewer in length" and — critically —
-# raises it as an *exception*, which previously happened in the middle of
-# /voicepanel setup, right after the channels were created but BEFORE
-# set_cfg() ran. That meant the channels existed but the config was never
-# saved, so /voicepanel info reported "not configured" and joining the
-# Create Voice channel silently did nothing (on_voice_state_update found no
-# cfg and returned early).
-EMBED_FIELD_LIMIT = 1024
 
 # ─── Custom emojis (Ghostx application emojis) ──────────────────────────────
 # Centralized here so every embed/button in this file pulls from the same
@@ -75,73 +75,7 @@ EMOJI = {
     "panel":    "<:62470logs:1530120119827566623>",
 }
 
-# (key, label, description) — the single source of truth for the legend shown
-# both on the public #voice-panel channel AND inside every room's own panel.
-LEGEND = [
-    ("lock",     "Lock",         "Stop new members from joining your room"),
-    ("unlock",   "Unlock",       "Allow anyone to join again"),
-    ("hide",     "Hide",         "Hide the room from the channel list"),
-    ("show",     "Show",         "Make the room visible again"),
-    ("limit",    "Limit",        "Set a maximum number of members"),
-    ("invite",   "Invite",       "Give a specific member access by ID"),
-    ("ban",      "Ban",          "Block a member from this room"),
-    ("permit",   "Permit",       "Allow a specific member to connect"),
-    ("rename",   "Rename",       "Change the room's name"),
-    ("bitrate",  "Bitrate",      "Set the audio quality (8–384 kbps)"),
-    ("region",   "Region",       "Choose a voice server region"),
-    ("template", "Template",     "Apply a preset (name, limit, bitrate)"),
-    ("claim",    "Claim",        "Become owner if the current owner has left"),
-    ("transfer", "Transfer",     "Hand ownership to another member in the room"),
-    ("waiting",  "Waiting Room", "Toggle slowmode on this panel channel"),
-    ("delete",   "Delete",       "Close the room and remove its panel"),
-]
-
-
-def _legend_chunks() -> list[str]:
-    """Split the legend into chunks that each fit under Discord's 1024-char
-    embed field value limit. Splitting on whole lines (never mid-line) so
-    each control's icon/label/description always stays together."""
-    lines = [f"{EMOJI[key]} **{label}** — {desc}" for key, label, desc in LEGEND]
-    chunks: list[str] = []
-    current = ""
-    for line in lines:
-        candidate = f"{current}\n{line}" if current else line
-        if len(candidate) > EMBED_FIELD_LIMIT:
-            if current:
-                chunks.append(current)
-            current = line
-        else:
-            current = candidate
-    if current:
-        chunks.append(current)
-    return chunks
-
-
-def _add_legend_fields(embed: discord.Embed, first_field_name: str = "Controls") -> None:
-    """Adds the legend as one or more embed fields, each safely under the
-    1024-char limit. Use this instead of a single add_field(value=...) call
-    anywhere the legend is shown."""
-    for i, chunk in enumerate(_legend_chunks()):
-        embed.add_field(
-            name=first_field_name if i == 0 else "\u200b",
-            value=chunk,
-            inline=False,
-        )
-
-
-def build_legend_embed() -> discord.Embed:
-    """The always-visible reference embed. Posted ONCE in the public
-    #voice-panel channel during /voicepanel setup, right after the
-    'Join to Create' embed — it stays there permanently, so members can read
-    what every control does before they ever create a room."""
-    embed = discord.Embed(
-        title=f"{EMOJI['voice']} Voice Room Controls",
-        description="Create a room from the channel above and you'll get a private panel with these controls:",
-        color=0x5865F2,
-    )
-    _add_legend_fields(embed, first_field_name="\u200b")
-    embed.set_footer(text=f"{config.BOT_NAME} | Dev: {config.DEVELOPER}")
-    return embed
+DEFAULT_PANEL_COLOR = 0x5865F2
 
 
 # ─── Storage ─────────────────────────────────────────────────────────────────
@@ -158,15 +92,13 @@ def get_cfg(guild_id: int) -> dict:
 def set_cfg(guild_id: int, cfg: dict):
     d = _load(); d[str(guild_id)] = cfg; _save(d)
 
-def add_room(guild_id: int, vc_id: int, owner_id: int, panel_ch_id: int, panel_msg_id: int):
+def add_room(guild_id: int, vc_id: int, owner_id: int):
     d = _load()
     d.setdefault(str(guild_id), {}).setdefault("rooms", {})[str(vc_id)] = {
-        "owner_id":     owner_id,
-        "panel_ch_id":  panel_ch_id,
-        "panel_msg_id": panel_msg_id,
-        "locked":  False,
-        "hidden":  False,
-        "banned":  [],
+        "owner_id": owner_id,
+        "locked":   False,
+        "hidden":   False,
+        "banned":   [],
         "permitted": [],
     }
     _save(d)
@@ -186,6 +118,13 @@ def del_room(guild_id: int, vc_id: int):
 
 def all_rooms(guild_id: int) -> dict:
     return _load().get(str(guild_id), {}).get("rooms", {})
+
+def find_room_by_owner(guild_id: int, owner_id: int):
+    """Returns (vc_id, room_dict) for the room this member owns, or (None, None)."""
+    for vid, rd in all_rooms(guild_id).items():
+        if rd.get("owner_id") == owner_id:
+            return int(vid), rd
+    return None, None
 
 
 # ─── Modals ───────────────────────────────────────────────────────────────────
@@ -214,34 +153,45 @@ class _IDModal(discord.ui.Modal):
         await self._cb(interaction, uid)
 
 
-# ─── Control Panel View (16 buttons, 4 rows) ─────────────────────────────────
+# ─── Shared Control Panel View (16 buttons, 4 rows) ──────────────────────────
 
 class VoiceControlView(discord.ui.View):
     """
-    Persistent panel posted in the owner's private text channel.
-    Buttons mirror the Astro/Scoza layout from the screenshots.
+    ONE persistent view, posted ONCE on the shared #voice-panel message.
+    custom_ids are static (no per-room suffix) because this view isn't tied
+    to any single room — every button figures out "which room" by looking
+    at the clicking member's current voice channel. This is what lets a
+    single message control everyone's room without a private panel per
+    person.
     """
-    def __init__(self, vc_id: int = 0, owner_id: int = 0, guild_id: int = 0):
+    def __init__(self):
         super().__init__(timeout=None)
-        self.vc_id    = vc_id
-        self.owner_id = owner_id
-        self.guild_id = guild_id
-        for btn in self.children:
-            if hasattr(btn, "custom_id"):
-                btn.custom_id = btn.custom_id.replace("_0", f"_{vc_id}")
 
     # ── helpers ──────────────────────────────────────────────────────────────
-    async def _auth(self, inter: discord.Interaction):
-        rd = get_room(inter.guild_id, self.vc_id)
+    async def _target(self, inter: discord.Interaction, require_owner: bool = True):
+        """Resolve (voice_channel, room_dict) for the button click, based on
+        the clicking member's current voice channel — NOT any stored vc_id,
+        since this view is shared by everyone."""
+        vs = inter.user.voice
+        if not vs or not vs.channel:
+            await inter.response.send_message(
+                f"{EMOJI['ban']} You need to be connected to your voice room to use this.",
+                ephemeral=True,
+            )
+            return None, None
+        vc = vs.channel
+        rd = get_room(inter.guild_id, vc.id)
         if not rd:
-            await inter.response.send_message(f"{EMOJI['ban']} Room data not found.", ephemeral=True)
+            await inter.response.send_message(
+                f"{EMOJI['ban']} This voice channel isn't a managed room.",
+                ephemeral=True,
+            )
             return None, None
-        if inter.user.id != rd["owner_id"] and not inter.user.guild_permissions.administrator:
-            await inter.response.send_message(f"{EMOJI['ban']} Only the room owner can do this.", ephemeral=True)
-            return None, None
-        vc = inter.guild.get_channel(self.vc_id)
-        if not vc:
-            await inter.response.send_message(f"{EMOJI['ban']} Voice channel no longer exists.", ephemeral=True)
+        if require_owner and inter.user.id != rd["owner_id"] and not inter.user.guild_permissions.administrator:
+            await inter.response.send_message(
+                f"{EMOJI['ban']} Only the room owner can do that.",
+                ephemeral=True,
+            )
             return None, None
         return vc, rd
 
@@ -252,14 +202,12 @@ class VoiceControlView(discord.ui.View):
             await inter.response.send_message(text, ephemeral=True)
 
     @staticmethod
-    async def _swap_owner(guild: discord.Guild, vc: discord.VoiceChannel, rd: dict,
+    async def _swap_owner(guild: discord.Guild, vc: discord.VoiceChannel,
                            old_owner_id: int, new_owner: discord.Member):
-        """Move VC + panel-channel Discord permissions from the old owner to
-        the new owner. Without this, claim/transfer only updated the DB and
-        the new owner had no real access to the panel channel or VC controls."""
+        """Move the VC's elevated Discord permission overwrite from the old
+        owner to the new owner. Without this, claim/transfer only updated the
+        DB and the new owner had no real manage_channels/move_members access."""
         old_owner = guild.get_member(old_owner_id)
-
-        # Voice channel: strip old owner's elevated overwrite, grant new owner.
         if old_owner and old_owner.id != new_owner.id:
             try:
                 await vc.set_permissions(old_owner, overwrite=None)
@@ -274,68 +222,51 @@ class VoiceControlView(discord.ui.View):
         except Exception:
             pass
 
-        # Private panel text channel: only the owner could see it before —
-        # move that visibility over too.
-        panel_ch = guild.get_channel(rd.get("panel_ch_id", 0))
-        if panel_ch:
-            if old_owner and old_owner.id != new_owner.id:
-                try:
-                    await panel_ch.set_permissions(old_owner, overwrite=None)
-                except Exception:
-                    pass
-            try:
-                await panel_ch.set_permissions(
-                    new_owner,
-                    view_channel=True, send_messages=False, read_message_history=True,
-                )
-            except Exception:
-                pass
-
     # ── Row 1 ─────────────────────────────────────────────────────────────────
-    @discord.ui.button(emoji=EMOJI["lock"], style=discord.ButtonStyle.secondary, custom_id="vc_lock_0",   row=0)
+    @discord.ui.button(emoji=EMOJI["lock"], label="Lock", style=discord.ButtonStyle.secondary, custom_id="vc_lock", row=0)
     async def btn_lock(self, inter: discord.Interaction, _):
-        vc, rd = await self._auth(inter)
+        vc, rd = await self._target(inter)
         if not vc: return
         ow = vc.overwrites_for(inter.guild.default_role)
         ow.connect = False
         await vc.set_permissions(inter.guild.default_role, overwrite=ow)
-        upd_room(inter.guild_id, self.vc_id, locked=True)
+        upd_room(inter.guild_id, vc.id, locked=True)
         await self._reply(inter, f"{EMOJI['lock']} Room **locked** — no one new can join.")
 
-    @discord.ui.button(emoji=EMOJI["unlock"], style=discord.ButtonStyle.secondary, custom_id="vc_unlock_0", row=0)
+    @discord.ui.button(emoji=EMOJI["unlock"], label="Unlock", style=discord.ButtonStyle.secondary, custom_id="vc_unlock", row=0)
     async def btn_unlock(self, inter: discord.Interaction, _):
-        vc, rd = await self._auth(inter)
+        vc, rd = await self._target(inter)
         if not vc: return
         ow = vc.overwrites_for(inter.guild.default_role)
         ow.connect = None
         await vc.set_permissions(inter.guild.default_role, overwrite=ow)
-        upd_room(inter.guild_id, self.vc_id, locked=False)
+        upd_room(inter.guild_id, vc.id, locked=False)
         await self._reply(inter, f"{EMOJI['unlock']} Room **unlocked** — anyone can join.")
 
-    @discord.ui.button(emoji=EMOJI["hide"], style=discord.ButtonStyle.secondary, custom_id="vc_hide_0",   row=0)
+    @discord.ui.button(emoji=EMOJI["hide"], label="Hide", style=discord.ButtonStyle.secondary, custom_id="vc_hide", row=0)
     async def btn_hide(self, inter: discord.Interaction, _):
-        vc, rd = await self._auth(inter)
+        vc, rd = await self._target(inter)
         if not vc: return
         ow = vc.overwrites_for(inter.guild.default_role)
         ow.view_channel = False
         await vc.set_permissions(inter.guild.default_role, overwrite=ow)
-        upd_room(inter.guild_id, self.vc_id, hidden=True)
+        upd_room(inter.guild_id, vc.id, hidden=True)
         await self._reply(inter, f"{EMOJI['hide']} Room **hidden** from everyone.")
 
-    @discord.ui.button(emoji=EMOJI["show"], style=discord.ButtonStyle.secondary, custom_id="vc_show_0",   row=0)
+    @discord.ui.button(emoji=EMOJI["show"], label="Show", style=discord.ButtonStyle.secondary, custom_id="vc_show", row=0)
     async def btn_show(self, inter: discord.Interaction, _):
-        vc, rd = await self._auth(inter)
+        vc, rd = await self._target(inter)
         if not vc: return
         ow = vc.overwrites_for(inter.guild.default_role)
         ow.view_channel = None
         await vc.set_permissions(inter.guild.default_role, overwrite=ow)
-        upd_room(inter.guild_id, self.vc_id, hidden=False)
+        upd_room(inter.guild_id, vc.id, hidden=False)
         await self._reply(inter, f"{EMOJI['show']} Room **visible** again.")
 
     # ── Row 2 ─────────────────────────────────────────────────────────────────
-    @discord.ui.button(emoji=EMOJI["limit"], style=discord.ButtonStyle.secondary, custom_id="vc_limit_0",  row=1)
+    @discord.ui.button(emoji=EMOJI["limit"], label="Limit", style=discord.ButtonStyle.secondary, custom_id="vc_limit", row=1)
     async def btn_limit(self, inter: discord.Interaction, _):
-        vc, rd = await self._auth(inter)
+        vc, rd = await self._target(inter)
         if not vc: return
         async def cb(inter2, val):
             try:
@@ -347,9 +278,9 @@ class VoiceControlView(discord.ui.View):
             await inter2.response.send_message(f"{EMOJI['limit']} Limit set to **{'Unlimited' if n==0 else n}**.", ephemeral=True)
         await inter.response.send_modal(_TextModal("Set Limit", "Max members (0=unlimited)", "0–99", cb))
 
-    @discord.ui.button(emoji=EMOJI["invite"], style=discord.ButtonStyle.secondary, custom_id="vc_invite_0", row=1)
+    @discord.ui.button(emoji=EMOJI["invite"], label="Invite", style=discord.ButtonStyle.secondary, custom_id="vc_invite", row=1)
     async def btn_invite(self, inter: discord.Interaction, _):
-        vc, rd = await self._auth(inter)
+        vc, rd = await self._target(inter)
         if not vc: return
         async def cb(inter2, uid):
             m = inter2.guild.get_member(uid)
@@ -360,13 +291,13 @@ class VoiceControlView(discord.ui.View):
             banned = rd.get("banned", [])
             if uid in banned: banned.remove(uid)
             permitted = rd.get("permitted", []); permitted.append(uid)
-            upd_room(inter2.guild_id, self.vc_id, permitted=list(set(permitted)), banned=banned)
+            upd_room(inter2.guild_id, vc.id, permitted=list(set(permitted)), banned=banned)
             await inter2.response.send_message(f"{EMOJI['invite']} **{m.display_name}** invited.", ephemeral=True)
         await inter.response.send_modal(_IDModal("Invite Member", cb))
 
-    @discord.ui.button(emoji=EMOJI["ban"], style=discord.ButtonStyle.danger,     custom_id="vc_ban_0",   row=1)
+    @discord.ui.button(emoji=EMOJI["ban"], label="Ban", style=discord.ButtonStyle.danger, custom_id="vc_ban", row=1)
     async def btn_ban(self, inter: discord.Interaction, _):
-        vc, rd = await self._auth(inter)
+        vc, rd = await self._target(inter)
         if not vc: return
         async def cb(inter2, uid):
             m = inter2.guild.get_member(uid)
@@ -378,13 +309,13 @@ class VoiceControlView(discord.ui.View):
             if m.voice and m.voice.channel == vc:
                 await m.move_to(None)
             banned = rd.get("banned", []); banned.append(uid)
-            upd_room(inter2.guild_id, self.vc_id, banned=list(set(banned)))
+            upd_room(inter2.guild_id, vc.id, banned=list(set(banned)))
             await inter2.response.send_message(f"{EMOJI['ban']} **{m.display_name}** banned from room.", ephemeral=True)
         await inter.response.send_modal(_IDModal("Ban Member", cb))
 
-    @discord.ui.button(emoji=EMOJI["permit"], style=discord.ButtonStyle.success,    custom_id="vc_permit_0", row=1)
+    @discord.ui.button(emoji=EMOJI["permit"], label="Permit", style=discord.ButtonStyle.success, custom_id="vc_permit", row=1)
     async def btn_permit(self, inter: discord.Interaction, _):
-        vc, rd = await self._auth(inter)
+        vc, rd = await self._target(inter)
         if not vc: return
         async def cb(inter2, uid):
             m = inter2.guild.get_member(uid)
@@ -392,26 +323,24 @@ class VoiceControlView(discord.ui.View):
             ow = vc.overwrites_for(m)
             ow.connect = True
             await vc.set_permissions(m, overwrite=ow)
-            # Keep the DB in sync too — previously only the Discord overwrite
-            # was set and this member never made it into rd["permitted"].
             permitted = rd.get("permitted", []); permitted.append(uid)
-            upd_room(inter2.guild_id, self.vc_id, permitted=list(set(permitted)))
+            upd_room(inter2.guild_id, vc.id, permitted=list(set(permitted)))
             await inter2.response.send_message(f"{EMOJI['permit']} **{m.display_name}** permitted.", ephemeral=True)
         await inter.response.send_modal(_IDModal("Permit Member", cb))
 
     # ── Row 3 ─────────────────────────────────────────────────────────────────
-    @discord.ui.button(emoji=EMOJI["rename"], style=discord.ButtonStyle.secondary, custom_id="vc_rename_0",  row=2)
+    @discord.ui.button(emoji=EMOJI["rename"], label="Rename", style=discord.ButtonStyle.secondary, custom_id="vc_rename", row=2)
     async def btn_rename(self, inter: discord.Interaction, _):
-        vc, rd = await self._auth(inter)
+        vc, rd = await self._target(inter)
         if not vc: return
         async def cb(inter2, val):
             await vc.edit(name=val)
             await inter2.response.send_message(f"{EMOJI['rename']} Room renamed to **{val}**.", ephemeral=True)
         await inter.response.send_modal(_TextModal("Rename Room", "New name", "e.g. Gaming Night", cb))
 
-    @discord.ui.button(emoji=EMOJI["bitrate"], style=discord.ButtonStyle.secondary, custom_id="vc_bitrate_0", row=2)
+    @discord.ui.button(emoji=EMOJI["bitrate"], label="Bitrate", style=discord.ButtonStyle.secondary, custom_id="vc_bitrate", row=2)
     async def btn_bitrate(self, inter: discord.Interaction, _):
-        vc, rd = await self._auth(inter)
+        vc, rd = await self._target(inter)
         if not vc: return
         async def cb(inter2, val):
             try:
@@ -423,9 +352,9 @@ class VoiceControlView(discord.ui.View):
             await inter2.response.send_message(f"{EMOJI['bitrate']} Bitrate set to **{n} kbps**.", ephemeral=True)
         await inter.response.send_modal(_TextModal("Set Bitrate", "Bitrate in kbps", "8–384 (default 64)", cb))
 
-    @discord.ui.button(emoji=EMOJI["region"], style=discord.ButtonStyle.secondary, custom_id="vc_region_0",  row=2)
+    @discord.ui.button(emoji=EMOJI["region"], label="Region", style=discord.ButtonStyle.secondary, custom_id="vc_region", row=2)
     async def btn_region(self, inter: discord.Interaction, _):
-        vc, rd = await self._auth(inter)
+        vc, rd = await self._target(inter)
         if not vc: return
         regions = ["auto","brazil","europe","hongkong","india","japan",
                    "rotterdam","russia","singapore","southafrica","sydney","us-central",
@@ -442,9 +371,9 @@ class VoiceControlView(discord.ui.View):
         v = discord.ui.View(timeout=60); v.add_item(select)
         await inter.response.send_message(f"{EMOJI['region']} Choose a region:", view=v, ephemeral=True)
 
-    @discord.ui.button(emoji=EMOJI["template"], style=discord.ButtonStyle.secondary, custom_id="vc_template_0", row=2)
+    @discord.ui.button(emoji=EMOJI["template"], label="Template", style=discord.ButtonStyle.secondary, custom_id="vc_template", row=2)
     async def btn_template(self, inter: discord.Interaction, _):
-        vc, rd = await self._auth(inter)
+        vc, rd = await self._target(inter)
         if not vc: return
         templates = {
             "Gaming":     (0, 64000, False),
@@ -465,108 +394,116 @@ class VoiceControlView(discord.ui.View):
                 ow = vc.overwrites_for(inter2.guild.default_role)
                 ow.connect = False
                 await vc.set_permissions(inter2.guild.default_role, overwrite=ow)
-                upd_room(inter2.guild_id, self.vc_id, locked=True)
+                upd_room(inter2.guild_id, vc.id, locked=True)
             await inter2.response.send_message(f"{EMOJI['template']} Template **{name}** applied.", ephemeral=True)
         select.callback = on_select
         v = discord.ui.View(timeout=60); v.add_item(select)
         await inter.response.send_message(f"{EMOJI['template']} Choose a template:", view=v, ephemeral=True)
 
     # ── Row 4 ─────────────────────────────────────────────────────────────────
-    @discord.ui.button(emoji=EMOJI["claim"], style=discord.ButtonStyle.primary,  custom_id="vc_claim_0",    row=3)
+    @discord.ui.button(emoji=EMOJI["claim"], label="Claim", style=discord.ButtonStyle.primary, custom_id="vc_claim", row=3)
     async def btn_claim(self, inter: discord.Interaction, _):
-        rd = get_room(inter.guild_id, self.vc_id)
-        if not rd: await inter.response.send_message(f"{EMOJI['ban']} Room not found.", ephemeral=True); return
-        vc = inter.guild.get_channel(self.vc_id)
-        if not vc: await inter.response.send_message(f"{EMOJI['ban']} VC gone.", ephemeral=True); return
+        vc, rd = await self._target(inter, require_owner=False)
+        if not vc: return
+        if rd["owner_id"] == inter.user.id:
+            await inter.response.send_message(f"{EMOJI['ban']} You already own this room.", ephemeral=True); return
         owner = inter.guild.get_member(rd["owner_id"])
         if owner and owner.voice and owner.voice.channel == vc:
-            await inter.response.send_message(f"{EMOJI['ban']} The owner is still in the room.", ephemeral=True); return
-        if inter.user.voice and inter.user.voice.channel == vc:
-            # Move real Discord permissions from the old owner to the claimer —
-            # previously only the DB record changed, so the new owner never
-            # actually got manage_channels/move_members or panel visibility.
-            await self._swap_owner(inter.guild, vc, rd, old_owner_id=rd["owner_id"], new_owner=inter.user)
-            upd_room(inter.guild_id, self.vc_id, owner_id=inter.user.id)
-            await inter.response.send_message(f"{EMOJI['claim']} You are now the **room owner**.", ephemeral=True)
-        else:
-            await inter.response.send_message(f"{EMOJI['ban']} You must be in the room to claim it.", ephemeral=True)
+            await inter.response.send_message(f"{EMOJI['ban']} The current owner is still in the room.", ephemeral=True); return
+        await self._swap_owner(inter.guild, vc, old_owner_id=rd["owner_id"], new_owner=inter.user)
+        upd_room(inter.guild_id, vc.id, owner_id=inter.user.id)
+        await inter.response.send_message(f"{EMOJI['claim']} You are now the **room owner**.", ephemeral=True)
 
-    @discord.ui.button(emoji=EMOJI["transfer"], style=discord.ButtonStyle.primary,  custom_id="vc_transfer_0", row=3)
+    @discord.ui.button(emoji=EMOJI["transfer"], label="Transfer", style=discord.ButtonStyle.primary, custom_id="vc_transfer", row=3)
     async def btn_transfer(self, inter: discord.Interaction, _):
-        vc, rd = await self._auth(inter)
+        vc, rd = await self._target(inter)
         if not vc: return
         async def cb(inter2, uid):
             m = inter2.guild.get_member(uid)
             if not m: await inter2.response.send_message(f"{EMOJI['ban']} Member not found.", ephemeral=True); return
             if not (m.voice and m.voice.channel == vc):
                 await inter2.response.send_message(f"{EMOJI['ban']} That member isn't in your room.", ephemeral=True); return
-            # Same fix as claim: actually move the Discord-level permissions
-            # over to the new owner, not just the DB's owner_id field.
-            await self._swap_owner(inter2.guild, vc, rd, old_owner_id=rd["owner_id"], new_owner=m)
-            upd_room(inter2.guild_id, self.vc_id, owner_id=uid)
+            await self._swap_owner(inter2.guild, vc, old_owner_id=rd["owner_id"], new_owner=m)
+            upd_room(inter2.guild_id, vc.id, owner_id=uid)
             await inter2.response.send_message(f"{EMOJI['transfer']} Room transferred to **{m.display_name}**.", ephemeral=True)
         await inter.response.send_modal(_IDModal("Transfer Ownership", cb))
 
-    @discord.ui.button(emoji=EMOJI["waiting"], style=discord.ButtonStyle.secondary, custom_id="vc_waiting_0", row=3)
+    @discord.ui.button(emoji=EMOJI["waiting"], label="Waiting", style=discord.ButtonStyle.secondary, custom_id="vc_waiting", row=3)
     async def btn_waiting(self, inter: discord.Interaction, _):
-        vc, rd = await self._auth(inter)
+        vc, rd = await self._target(inter)
         if not vc: return
-        panel_ch = inter.guild.get_channel(rd["panel_ch_id"])
-        if panel_ch:
-            slow = 0 if panel_ch.slowmode_delay > 0 else 5
-            await panel_ch.edit(slowmode_delay=slow)
-            status = "enabled" if slow else "disabled"
-            await inter.response.send_message(f"{EMOJI['waiting']} Waiting mode **{status}**.", ephemeral=True)
-        else:
-            await inter.response.send_message(f"{EMOJI['ban']} Panel channel not found.", ephemeral=True)
+        # Voice channels have their own text-in-voice chat with slowmode —
+        # reused here since there's no more private panel channel to
+        # slowmode. Toggles a 5s slowmode on that in-voice chat.
+        new_delay = 0 if getattr(vc, "slowmode_delay", 0) else 5
+        await vc.edit(slowmode_delay=new_delay)
+        status = "enabled" if new_delay else "disabled"
+        await inter.response.send_message(f"{EMOJI['waiting']} Waiting mode **{status}**.", ephemeral=True)
 
-    @discord.ui.button(emoji=EMOJI["delete"], style=discord.ButtonStyle.danger,   custom_id="vc_del_0",     row=3)
+    @discord.ui.button(emoji=EMOJI["delete"], label="Delete", style=discord.ButtonStyle.danger, custom_id="vc_delete", row=3)
     async def btn_delete(self, inter: discord.Interaction, _):
-        vc, rd = await self._auth(inter)
+        vc, rd = await self._target(inter)
         if not vc: return
         await inter.response.send_message(f"{EMOJI['delete']} Deleting your room…", ephemeral=True)
         try: await vc.delete(reason=f"Owner deleted | {inter.user}")
         except Exception: pass
-        panel_ch = inter.guild.get_channel(rd["panel_ch_id"])
-        if panel_ch:
-            try: await panel_ch.delete(reason="Voice room closed")
-            except Exception: pass
-        del_room(inter.guild_id, self.vc_id)
+        del_room(inter.guild_id, vc.id)
 
 
-# ─── Panel embed builder ──────────────────────────────────────────────────────
+# ─── Shared panel embed builder (short, fully customizable) ─────────────────
 
-def _panel_embed(guild: discord.Guild, vc: discord.VoiceChannel, rd: dict) -> discord.Embed:
-    owner = guild.get_member(rd["owner_id"])
-    lock_icon  = f"{EMOJI['lock']} Locked"  if rd.get("locked") else f"{EMOJI['unlock']} Open"
-    hide_icon  = f"{EMOJI['hide']} Hidden"  if rd.get("hidden") else f"{EMOJI['show']} Visible"
-    members_in = [m.mention for m in vc.members] if vc else []
+def build_panel_embed(guild: discord.Guild, cfg: dict) -> discord.Embed:
+    """Short embed for the single shared #voice-panel message. No verbose
+    per-button legend anymore — buttons carry their own emoji + label, so
+    the embed just needs a short intro. Every visual piece is customizable
+    via /voicepanel setup or /voicepanel customize:
+      panel_title, panel_desc, panel_image, panel_thumbnail,
+      panel_footer, panel_color
+    """
+    jtc = guild.get_channel(cfg.get("jtc_vc_id", 0))
+    jtc_mention = jtc.mention if jtc else "**Create Voice**"
 
     embed = discord.Embed(
-        title=f"{EMOJI['voice']} Voice Room Control Panel",
-        description="This panel is posted immediately when your room is created and stays here for as long as it exists.",
-        color=0x5865F2,
-        timestamp=datetime.now(),
+        title=cfg.get("panel_title") or f"{EMOJI['voice']} Voice Rooms",
+        description=cfg.get("panel_desc") or (
+            f"Join {jtc_mention} to get your own room, then use the buttons "
+            "below anytime to control it."
+        ),
+        color=cfg.get("panel_color", DEFAULT_PANEL_COLOR),
     )
-    embed.set_author(
-        name=config.SERVER_NAME,
-        icon_url=guild.icon.url if guild.icon else None,
-    )
-    if owner:
-        embed.set_thumbnail(url=owner.display_avatar.url)
-    embed.add_field(name="Owner",      value=owner.mention if owner else "—", inline=True)
-    embed.add_field(name="Status",     value=lock_icon, inline=True)
-    embed.add_field(name="Visibility", value=hide_icon, inline=True)
-    embed.add_field(
-        name=f"{EMOJI['members']} Members ({len(members_in)})",
-        value=" ".join(members_in) if members_in else "Empty",
-        inline=False,
-    )
-    # Was a single add_field(value=_legend_text()) call — same 1024-char
-    # overflow bug as the public legend embed. Now split across fields.
-    _add_legend_fields(embed, first_field_name="Controls")
-    embed.set_footer(text=f"{config.BOT_NAME} | Channel ID: {vc.id if vc else '—'} | Dev: {config.DEVELOPER}")
+    thumbnail = cfg.get("panel_thumbnail")
+    if thumbnail:
+        embed.set_thumbnail(url=thumbnail)
+    image = cfg.get("panel_image")
+    if image:
+        embed.set_image(url=image)
+    embed.set_footer(text=cfg.get("panel_footer") or f"{config.BOT_NAME} | Dev: {config.DEVELOPER}")
     return embed
+
+
+async def _refresh_panel_message(guild: discord.Guild, cfg: dict) -> discord.Message | None:
+    """Edits the existing shared panel message in place if it still exists,
+    otherwise sends a new one. Always keeps exactly ONE panel message per
+    guild — never duplicates it."""
+    panel_ch = guild.get_channel(cfg.get("panel_text_id", 0))
+    if not panel_ch:
+        return None
+
+    embed = build_panel_embed(guild, cfg)
+    view = VoiceControlView()
+
+    msg_id = cfg.get("panel_msg_id")
+    if msg_id:
+        try:
+            msg = await panel_ch.fetch_message(msg_id)
+            return await msg.edit(embed=embed, view=view)
+        except Exception:
+            pass  # message was deleted or inaccessible — fall through and repost
+
+    msg = await panel_ch.send(embed=embed, view=view)
+    cfg["panel_msg_id"] = msg.id
+    set_cfg(guild.id, cfg)
+    return msg
 
 
 # ─── VoicePanelGroup (slash commands) ────────────────────────────────────────
@@ -580,11 +517,17 @@ class VoicePanelGroup(app_commands.Group):
         )
         self.bot = bot
 
-    @app_commands.command(name="setup", description="Set up the Join-to-Create voice system")
+    @app_commands.command(name="setup", description="Set up (or refresh) the Voice Rooms panel")
     @app_commands.describe(
-        category       = "Category to create/use for voice rooms",
-        default_name   = "Default room name — use {user} as placeholder",
-        default_limit  = "Default user limit (0 = unlimited)",
+        category      = "Category to create/use for voice rooms",
+        default_name  = "Default room name — use {user} as placeholder",
+        default_limit = "Default user limit (0 = unlimited)",
+        title         = "Custom panel title (optional)",
+        description   = "Custom panel description (optional, keep it short)",
+        image         = "Image URL shown at the bottom of the panel (optional)",
+        thumbnail     = "Thumbnail URL shown top-right of the panel (optional)",
+        footer        = "Custom footer text (optional)",
+        color         = "Hex color like 5865F2 (optional)",
     )
     async def setup(
         self,
@@ -592,90 +535,91 @@ class VoicePanelGroup(app_commands.Group):
         category:      discord.CategoryChannel,
         default_name:  str = "{user}'s Room",
         default_limit: app_commands.Range[int, 0, 99] = 0,
+        title:         str = None,
+        description:   str = None,
+        image:         str = None,
+        thumbnail:     str = None,
+        footer:        str = None,
+        color:         str = None,
     ):
         await interaction.response.defer(ephemeral=True)
-
         guild = interaction.guild
+        cfg = get_cfg(interaction.guild_id)
 
-        # ── 1. create the public text channel for the panel ──
-        # (channel names only support unicode emoji, not custom application emojis)
-        panel_overwrites = {
-            guild.default_role: discord.PermissionOverwrite(view_channel=True, send_messages=False, read_message_history=True),
-            guild.me: discord.PermissionOverwrite(view_channel=True, send_messages=True, manage_channels=True, manage_messages=True),
-        }
-        try:
-            panel_text_ch = await guild.create_text_channel(
-                name="voice-panel",
-                category=category,
-                overwrites=panel_overwrites,
-                topic="Manage your voice room using the buttons below.",
-                reason="VoicePanel setup",
-            )
-        except Exception as e:
-            await interaction.followup.send(f"{EMOJI['ban']} Could not create panel channel: {e}", ephemeral=True); return
+        existing_panel_ch = guild.get_channel(cfg.get("panel_text_id", 0)) if cfg else None
+        existing_jtc      = guild.get_channel(cfg.get("jtc_vc_id", 0))     if cfg else None
 
-        # ── 2. create the Join-to-Create VC ──
-        vc_overwrites = {
-            guild.default_role: discord.PermissionOverwrite(view_channel=True, connect=True),
-            guild.me:           discord.PermissionOverwrite(view_channel=True, connect=True, manage_channels=True, move_members=True),
-        }
-        try:
-            jtc_vc = await guild.create_voice_channel(
-                name="Create Voice",
-                category=category,
-                user_limit=0,
-                overwrites=vc_overwrites,
-                reason="VoicePanel JTC setup",
-            )
-        except Exception as e:
-            await interaction.followup.send(f"{EMOJI['ban']} Could not create JTC channel: {e}", ephemeral=True); return
+        if cfg and existing_panel_ch and existing_jtc:
+            # Already configured — reuse the existing channels, just refresh
+            # config + the panel message in place (no duplicate channels/messages).
+            panel_text_ch = existing_panel_ch
+            jtc_vc        = existing_jtc
+        else:
+            # ── 1. create the public text channel for the panel ──
+            panel_overwrites = {
+                guild.default_role: discord.PermissionOverwrite(view_channel=True, send_messages=False, read_message_history=True),
+                guild.me: discord.PermissionOverwrite(view_channel=True, send_messages=True, manage_channels=True, manage_messages=True),
+            }
+            try:
+                panel_text_ch = await guild.create_text_channel(
+                    name="voice-panel",
+                    category=category,
+                    overwrites=panel_overwrites,
+                    topic="Manage your voice room using the buttons below.",
+                    reason="VoicePanel setup",
+                )
+            except Exception as e:
+                await interaction.followup.send(f"{EMOJI['ban']} Could not create panel channel: {e}", ephemeral=True); return
 
-        # ── 3. Save config FIRST ──
-        # Moved ahead of the embed posting below. Previously the config was
-        # saved LAST, after posting the join embed and the controls legend.
-        # The legend embed used to overflow Discord's 1024-char field limit
-        # and raise an HTTPException — which happened *after* the channels
-        # were created but *before* set_cfg() ran. Net result: channels
-        # existed, but the guild was never marked as configured, so joining
-        # the Create Voice channel silently did nothing. Saving config right
-        # after the channels exist means a cosmetic embed failure can never
-        # again leave the system half-configured.
-        set_cfg(interaction.guild_id, {
+            # ── 2. create the Join-to-Create VC ──
+            vc_overwrites = {
+                guild.default_role: discord.PermissionOverwrite(view_channel=True, connect=True),
+                guild.me:           discord.PermissionOverwrite(view_channel=True, connect=True, manage_channels=True, move_members=True),
+            }
+            try:
+                jtc_vc = await guild.create_voice_channel(
+                    name="Create Voice",
+                    category=category,
+                    user_limit=0,
+                    overwrites=vc_overwrites,
+                    reason="VoicePanel JTC setup",
+                )
+            except Exception as e:
+                await interaction.followup.send(f"{EMOJI['ban']} Could not create JTC channel: {e}", ephemeral=True); return
+
+        # ── 3. Save config FIRST, before touching any embeds ──
+        # Config must exist before we try to post/edit anything cosmetic, so
+        # a failure below can never leave channels created but unconfigured.
+        cfg = get_cfg(interaction.guild_id) or {}
+        cfg.update({
             "jtc_vc_id":      jtc_vc.id,
             "category_id":    category.id,
             "panel_text_id":  panel_text_ch.id,
             "default_name":   default_name,
             "default_limit":  default_limit,
-            "rooms":          {},
+            "rooms":          cfg.get("rooms", {}),
         })
+        if title       is not None: cfg["panel_title"] = title
+        if description is not None: cfg["panel_desc"] = description
+        if image       is not None: cfg["panel_image"] = image
+        if thumbnail   is not None: cfg["panel_thumbnail"] = thumbnail
+        if footer      is not None: cfg["panel_footer"] = footer
+        if color:
+            try:
+                cfg["panel_color"] = int(color.strip("#"), 16)
+            except ValueError:
+                pass
+        set_cfg(interaction.guild_id, cfg)
 
-        # ── 4. post the join embed + the ALWAYS-VISIBLE controls legend ──
-        panel_embed = discord.Embed(
-            title=f"{EMOJI['voice']} Voice Room System",
-            description=(
-                f"Join **{jtc_vc.mention}** to instantly get your own **private voice room** "
-                "with full control.\n\nYour room is deleted automatically when empty."
-            ),
-            color=0x5865F2,
-            timestamp=datetime.now(),
-        )
-        panel_embed.set_author(
-            name=config.SERVER_NAME,
-            icon_url=guild.icon.url if guild.icon else None,
-        )
-        panel_embed.set_footer(text=f"{config.BOT_NAME} | Dev: {config.DEVELOPER}")
+        # ── 4. post (or refresh in place) the ONE shared panel message ──
         try:
-            await panel_text_ch.send(embed=panel_embed)
-            # This legend stays here permanently — members can read what every
-            # control does before they've ever created a room.
-            await panel_text_ch.send(embed=build_legend_embed())
+            await _refresh_panel_message(guild, cfg)
         except Exception as e:
-            # Config is already saved at this point, so the system still
-            # works even if posting these informational embeds fails.
             await interaction.followup.send(
-                f"{EMOJI['ban']} Setup finished and is active, but posting the panel message failed: {e}",
+                f"{EMOJI['ban']} Setup finished and is active, but posting/updating the panel message failed: {e}",
                 ephemeral=True,
             )
+            return
 
         confirm = discord.Embed(title=f"{EMOJI['check']} Voice Panel Ready", color=0x57F287)
         confirm.add_field(name="Panel Channel", value=panel_text_ch.mention, inline=True)
@@ -684,6 +628,54 @@ class VoicePanelGroup(app_commands.Group):
         confirm.add_field(name="Default Name",  value=f"`{default_name}`",   inline=True)
         confirm.set_footer(text=f"{config.BOT_NAME} | Dev: {config.DEVELOPER}")
         await interaction.followup.send(embed=confirm, ephemeral=True)
+
+    @app_commands.command(name="customize", description="Edit the panel embed without touching channels")
+    @app_commands.describe(
+        title       = "Custom panel title",
+        description = "Custom panel description (keep it short)",
+        image       = "Image URL shown at the bottom of the panel — pass 'none' to remove",
+        thumbnail   = "Thumbnail URL shown top-right of the panel — pass 'none' to remove",
+        footer      = "Custom footer text",
+        color       = "Hex color like 5865F2",
+    )
+    async def customize(
+        self,
+        interaction: discord.Interaction,
+        title:       str = None,
+        description: str = None,
+        image:       str = None,
+        thumbnail:   str = None,
+        footer:      str = None,
+        color:       str = None,
+    ):
+        cfg = get_cfg(interaction.guild_id)
+        guild = interaction.guild
+        if not cfg or not guild.get_channel(cfg.get("panel_text_id", 0)):
+            await interaction.response.send_message(
+                f"{EMOJI['ban']} Run `/voicepanel setup` first.", ephemeral=True
+            )
+            return
+
+        await interaction.response.defer(ephemeral=True)
+
+        if title       is not None: cfg["panel_title"] = title
+        if description is not None: cfg["panel_desc"] = description
+        if image       is not None: cfg["panel_image"] = None if image.lower() == "none" else image
+        if thumbnail   is not None: cfg["panel_thumbnail"] = None if thumbnail.lower() == "none" else thumbnail
+        if footer      is not None: cfg["panel_footer"] = footer
+        if color:
+            try:
+                cfg["panel_color"] = int(color.strip("#"), 16)
+            except ValueError:
+                await interaction.followup.send(f"{EMOJI['ban']} Invalid hex color.", ephemeral=True); return
+        set_cfg(interaction.guild_id, cfg)
+
+        try:
+            await _refresh_panel_message(guild, cfg)
+        except Exception as e:
+            await interaction.followup.send(f"{EMOJI['ban']} Couldn't update the panel: {e}", ephemeral=True); return
+
+        await interaction.followup.send(f"{EMOJI['check']} Panel updated.", ephemeral=True)
 
     @app_commands.command(name="info", description="Show voice panel config and active rooms")
     async def info(self, interaction: discord.Interaction):
@@ -721,6 +713,11 @@ class CreateVoice(commands.Cog):
         self._group = VoicePanelGroup(bot)
         bot.tree.add_command(self._group)
 
+    async def cog_load(self):
+        # Register the shared control view as persistent so its buttons keep
+        # working across bot restarts (static custom_ids + timeout=None).
+        self.bot.add_view(VoiceControlView())
+
     async def cog_unload(self):
         self.bot.tree.remove_command("voicepanel")
 
@@ -749,7 +746,7 @@ class CreateVoice(commands.Cog):
                 await asyncio.sleep(3)
                 vc = member.guild.get_channel(before.channel.id)
                 if vc and len(vc.members) == 0:
-                    await self._destroy_room(member.guild, before.channel.id, rd)
+                    await self._destroy_room(member.guild, before.channel.id)
 
     async def _dm_error(self, member: discord.Member, text: str):
         """Errors here used to only go to the console (print). That made
@@ -768,25 +765,23 @@ class CreateVoice(commands.Cog):
             await self._dm_error(member, "Voice panel category no longer exists — ask an admin to run /voicepanel setup again.")
             return
 
-        # One room per member — but repair it if the panel got lost last time
-        # instead of silently reusing a broken room forever.
-        rooms = all_rooms(guild.id)
-        for vid, rd in rooms.items():
-            existing_vc = guild.get_channel(int(vid))
-            if rd["owner_id"] == member.id and existing_vc:
+        # One room per member — if they already own a live room, just move
+        # them back into it instead of creating a duplicate.
+        existing_vc_id, rd = find_room_by_owner(guild.id, member.id)
+        if existing_vc_id:
+            existing_vc = guild.get_channel(existing_vc_id)
+            if existing_vc:
                 try:
                     await member.move_to(existing_vc)
                 except Exception:
                     pass
-                panel_ch = guild.get_channel(rd.get("panel_ch_id", 0))
-                if not panel_ch:
-                    await self._ensure_panel(member, guild, cat, existing_vc, rd)
                 return
+            else:
+                del_room(guild.id, existing_vc_id)  # stale entry, clean it up
 
         name          = cfg.get("default_name", "{user}'s Room").replace("{user}", member.display_name)
         default_limit = cfg.get("default_limit", 0)
 
-        # ── Create the voice channel ──
         vc_ow = {
             guild.default_role: discord.PermissionOverwrite(connect=True, view_channel=True),
             member:             discord.PermissionOverwrite(connect=True, view_channel=True, manage_channels=True, move_members=True),
@@ -806,63 +801,17 @@ class CreateVoice(commands.Cog):
             )
             return
 
-        # Move member in
         try:
             await member.move_to(vc)
         except Exception:
             pass
 
-        rd_seed = {"owner_id": member.id, "locked": False, "hidden": False, "banned": [], "permitted": [],
-                   "panel_ch_id": 0, "panel_msg_id": 0}
-        add_room(guild.id, vc.id, member.id, 0, 0)
+        add_room(guild.id, vc.id, member.id)
 
-        await self._ensure_panel(member, guild, cat, vc, rd_seed)
-
-    async def _ensure_panel(self, member: discord.Member, guild: discord.Guild,
-                             cat: discord.CategoryChannel, vc: discord.VoiceChannel, rd: dict):
-        """Create (or recreate) the private panel channel + control message for
-        an existing voice room. Called both right after a room is created and
-        as a repair path if a previous attempt left a room without a panel."""
-        txt_ow = {
-            guild.default_role: discord.PermissionOverwrite(view_channel=False),
-            member:             discord.PermissionOverwrite(view_channel=True, send_messages=False, read_message_history=True),
-            guild.me:           discord.PermissionOverwrite(view_channel=True, send_messages=True, manage_channels=True),
-        }
-        try:
-            panel_ch = await guild.create_text_channel(
-                name="panel-room",
-                category=cat,
-                overwrites=txt_ow,
-                reason=f"Private panel for {member}",
-            )
-        except Exception as e:
-            await self._dm_error(
-                member,
-                f"Your voice room was created, but I couldn't create its control panel ({e}). "
-                "This is almost always a missing 'Manage Channels' permission for the bot in "
-                "that category — an admin needs to grant it.",
-            )
-            return
-
-        upd_room(guild.id, vc.id, panel_ch_id=panel_ch.id)
-        rd["panel_ch_id"] = panel_ch.id
-
-        view  = VoiceControlView(vc_id=vc.id, owner_id=member.id, guild_id=guild.id)
-        embed = _panel_embed(guild, vc, rd)
-        try:
-            msg = await panel_ch.send(content=member.mention, embed=embed, view=view)
-            upd_room(guild.id, vc.id, panel_msg_id=msg.id)
-        except Exception as e:
-            await self._dm_error(member, f"Panel channel created, but sending the control message failed: {e}")
-
-    async def _destroy_room(self, guild: discord.Guild, vc_id: int, rd: dict):
+    async def _destroy_room(self, guild: discord.Guild, vc_id: int):
         vc = guild.get_channel(vc_id)
         if vc:
             try: await vc.delete(reason="Temp VC: empty, auto-deleted")
-            except Exception: pass
-        panel_ch = guild.get_channel(rd.get("panel_ch_id", 0))
-        if panel_ch:
-            try: await panel_ch.delete(reason="Voice room closed")
             except Exception: pass
         del_room(guild.id, vc_id)
 
