@@ -643,18 +643,36 @@ class CreateVoice(commands.Cog):
                 if vc and len(vc.members) == 0:
                     await self._destroy_room(member.guild, before.channel.id, rd)
 
+    async def _dm_error(self, member: discord.Member, text: str):
+        """Errors here used to only go to the console (print). That made
+        failures invisible to everyone except whoever reads Railway logs.
+        Now we also DM the member so the failure is obvious immediately."""
+        print(f"[CreateVoice] {text}")
+        try:
+            await member.send(f"{EMOJI['ban']} {text}")
+        except Exception:
+            pass  # member has DMs closed — the console log above is the fallback
+
     async def _create_room(self, member: discord.Member, cfg: dict):
         guild = member.guild
         cat   = guild.get_channel(cfg.get("category_id"))
+        if not cat:
+            await self._dm_error(member, "Voice panel category no longer exists — ask an admin to run /voicepanel setup again.")
+            return
 
-        # One room per member
+        # One room per member — but repair it if the panel got lost last time
+        # instead of silently reusing a broken room forever.
         rooms = all_rooms(guild.id)
         for vid, rd in rooms.items():
-            if rd["owner_id"] == member.id and guild.get_channel(int(vid)):
+            existing_vc = guild.get_channel(int(vid))
+            if rd["owner_id"] == member.id and existing_vc:
                 try:
-                    await member.move_to(guild.get_channel(int(vid)))
+                    await member.move_to(existing_vc)
                 except Exception:
                     pass
+                panel_ch = guild.get_channel(rd.get("panel_ch_id", 0))
+                if not panel_ch:
+                    await self._ensure_panel(member, guild, cat, existing_vc, rd)
                 return
 
         name          = cfg.get("default_name", "{user}'s Room").replace("{user}", member.display_name)
@@ -672,7 +690,13 @@ class CreateVoice(commands.Cog):
                 overwrites=vc_ow, reason=f"Temp VC for {member}"
             )
         except Exception as e:
-            print(f"[CreateVoice] VC create failed: {e}"); return
+            await self._dm_error(
+                member,
+                f"Couldn't create your voice room ({e}). This is usually a missing "
+                "'Manage Channels' permission for the bot in that category, or the "
+                "category has hit Discord's 50-channel limit.",
+            )
+            return
 
         # Move member in
         try:
@@ -680,7 +704,17 @@ class CreateVoice(commands.Cog):
         except Exception:
             pass
 
-        # ── Create the private panel text channel ──
+        rd_seed = {"owner_id": member.id, "locked": False, "hidden": False, "banned": [], "permitted": [],
+                   "panel_ch_id": 0, "panel_msg_id": 0}
+        add_room(guild.id, vc.id, member.id, 0, 0)
+
+        await self._ensure_panel(member, guild, cat, vc, rd_seed)
+
+    async def _ensure_panel(self, member: discord.Member, guild: discord.Guild,
+                             cat: discord.CategoryChannel, vc: discord.VoiceChannel, rd: dict):
+        """Create (or recreate) the private panel channel + control message for
+        an existing voice room. Called both right after a room is created and
+        as a repair path if a previous attempt left a room without a panel."""
         txt_ow = {
             guild.default_role: discord.PermissionOverwrite(view_channel=False),
             member:             discord.PermissionOverwrite(view_channel=True, send_messages=False, read_message_history=True),
@@ -694,26 +728,24 @@ class CreateVoice(commands.Cog):
                 reason=f"Private panel for {member}",
             )
         except Exception as e:
-            print(f"[CreateVoice] Panel channel create failed: {e}")
-            panel_ch = None
+            await self._dm_error(
+                member,
+                f"Your voice room was created, but I couldn't create its control panel ({e}). "
+                "This is almost always a missing 'Manage Channels' permission for the bot in "
+                "that category — an admin needs to grant it.",
+            )
+            return
 
-        # Seed room data (panel_ch_id=0 fallback if creation failed)
-        rd_seed = {"owner_id": member.id, "locked": False, "hidden": False, "banned": [], "permitted": [],
-                   "panel_ch_id": panel_ch.id if panel_ch else 0, "panel_msg_id": 0}
-        add_room(guild.id, vc.id, member.id, panel_ch.id if panel_ch else 0, 0)
+        upd_room(guild.id, vc.id, panel_ch_id=panel_ch.id)
+        rd["panel_ch_id"] = panel_ch.id
 
-        if panel_ch:
-            view  = VoiceControlView(vc_id=vc.id, owner_id=member.id, guild_id=guild.id)
-            embed = _panel_embed(guild, vc, rd_seed)
-            try:
-                msg = await panel_ch.send(
-                    content=member.mention,
-                    embed=embed,
-                    view=view,
-                )
-                upd_room(guild.id, vc.id, panel_msg_id=msg.id)
-            except Exception as e:
-                print(f"[CreateVoice] Panel msg failed: {e}")
+        view  = VoiceControlView(vc_id=vc.id, owner_id=member.id, guild_id=guild.id)
+        embed = _panel_embed(guild, vc, rd)
+        try:
+            msg = await panel_ch.send(content=member.mention, embed=embed, view=view)
+            upd_room(guild.id, vc.id, panel_msg_id=msg.id)
+        except Exception as e:
+            await self._dm_error(member, f"Panel channel created, but sending the control message failed: {e}")
 
     async def _destroy_room(self, guild: discord.Guild, vc_id: int, rd: dict):
         vc = guild.get_channel(vc_id)
