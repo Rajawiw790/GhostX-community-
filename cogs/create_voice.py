@@ -213,6 +213,46 @@ class VoiceControlView(discord.ui.View):
         else:
             await inter.response.send_message(text, ephemeral=True)
 
+    @staticmethod
+    async def _swap_owner(guild: discord.Guild, vc: discord.VoiceChannel, rd: dict,
+                           old_owner_id: int, new_owner: discord.Member):
+        """Move VC + panel-channel Discord permissions from the old owner to
+        the new owner. Without this, claim/transfer only updated the DB and
+        the new owner had no real access to the panel channel or VC controls."""
+        old_owner = guild.get_member(old_owner_id)
+
+        # Voice channel: strip old owner's elevated overwrite, grant new owner.
+        if old_owner and old_owner.id != new_owner.id:
+            try:
+                await vc.set_permissions(old_owner, overwrite=None)
+            except Exception:
+                pass
+        try:
+            await vc.set_permissions(
+                new_owner,
+                connect=True, view_channel=True,
+                manage_channels=True, move_members=True,
+            )
+        except Exception:
+            pass
+
+        # Private panel text channel: only the owner could see it before —
+        # move that visibility over too.
+        panel_ch = guild.get_channel(rd.get("panel_ch_id", 0))
+        if panel_ch:
+            if old_owner and old_owner.id != new_owner.id:
+                try:
+                    await panel_ch.set_permissions(old_owner, overwrite=None)
+                except Exception:
+                    pass
+            try:
+                await panel_ch.set_permissions(
+                    new_owner,
+                    view_channel=True, send_messages=False, read_message_history=True,
+                )
+            except Exception:
+                pass
+
     # ── Row 1 ─────────────────────────────────────────────────────────────────
     @discord.ui.button(style=discord.ButtonStyle.secondary, custom_id="vc_lock_0",   row=0)
     async def btn_lock(self, inter: discord.Interaction, _):
@@ -314,6 +354,10 @@ class VoiceControlView(discord.ui.View):
             ow = vc.overwrites_for(m)
             ow.connect = True
             await vc.set_permissions(m, overwrite=ow)
+            # Keep the DB in sync too — previously only the Discord overwrite
+            # was set and this member never made it into rd["permitted"].
+            permitted = rd.get("permitted", []); permitted.append(uid)
+            upd_room(inter2.guild_id, self.vc_id, permitted=list(set(permitted)))
             await inter2.response.send_message(f"{EMOJI['permit']} **{m.display_name}** permitted.", ephemeral=True)
         await inter.response.send_modal(_IDModal("Permit Member", cb))
 
@@ -400,6 +444,10 @@ class VoiceControlView(discord.ui.View):
         if owner and owner.voice and owner.voice.channel == vc:
             await inter.response.send_message(f"{EMOJI['ban']} The owner is still in the room.", ephemeral=True); return
         if inter.user.voice and inter.user.voice.channel == vc:
+            # Move real Discord permissions from the old owner to the claimer —
+            # previously only the DB record changed, so the new owner never
+            # actually got manage_channels/move_members or panel visibility.
+            await self._swap_owner(inter.guild, vc, rd, old_owner_id=rd["owner_id"], new_owner=inter.user)
             upd_room(inter.guild_id, self.vc_id, owner_id=inter.user.id)
             await inter.response.send_message(f"{EMOJI['claim']} You are now the **room owner**.", ephemeral=True)
         else:
@@ -414,6 +462,9 @@ class VoiceControlView(discord.ui.View):
             if not m: await inter2.response.send_message(f"{EMOJI['ban']} Member not found.", ephemeral=True); return
             if not (m.voice and m.voice.channel == vc):
                 await inter2.response.send_message(f"{EMOJI['ban']} That member isn't in your room.", ephemeral=True); return
+            # Same fix as claim: actually move the Discord-level permissions
+            # over to the new owner, not just the DB's owner_id field.
+            await self._swap_owner(inter2.guild, vc, rd, old_owner_id=rd["owner_id"], new_owner=m)
             upd_room(inter2.guild_id, self.vc_id, owner_id=uid)
             await inter2.response.send_message(f"{EMOJI['transfer']} Room transferred to **{m.display_name}**.", ephemeral=True)
         await inter.response.send_modal(_IDModal("Transfer Ownership", cb))
