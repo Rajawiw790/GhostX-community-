@@ -292,7 +292,7 @@ class VoiceControlView(discord.ui.View):
                 pass
 
     # ── Row 1 ─────────────────────────────────────────────────────────────────
-    @discord.ui.button(style=discord.ButtonStyle.secondary, custom_id="vc_lock_0",   row=0)
+    @discord.ui.button(emoji=EMOJI["lock"], style=discord.ButtonStyle.secondary, custom_id="vc_lock_0",   row=0)
     async def btn_lock(self, inter: discord.Interaction, _):
         vc, rd = await self._auth(inter)
         if not vc: return
@@ -302,7 +302,7 @@ class VoiceControlView(discord.ui.View):
         upd_room(inter.guild_id, self.vc_id, locked=True)
         await self._reply(inter, f"{EMOJI['lock']} Room **locked** — no one new can join.")
 
-    @discord.ui.button(style=discord.ButtonStyle.secondary, custom_id="vc_unlock_0", row=0)
+    @discord.ui.button(emoji=EMOJI["unlock"], style=discord.ButtonStyle.secondary, custom_id="vc_unlock_0", row=0)
     async def btn_unlock(self, inter: discord.Interaction, _):
         vc, rd = await self._auth(inter)
         if not vc: return
@@ -312,7 +312,7 @@ class VoiceControlView(discord.ui.View):
         upd_room(inter.guild_id, self.vc_id, locked=False)
         await self._reply(inter, f"{EMOJI['unlock']} Room **unlocked** — anyone can join.")
 
-    @discord.ui.button(style=discord.ButtonStyle.secondary, custom_id="vc_hide_0",   row=0)
+    @discord.ui.button(emoji=EMOJI["hide"], style=discord.ButtonStyle.secondary, custom_id="vc_hide_0",   row=0)
     async def btn_hide(self, inter: discord.Interaction, _):
         vc, rd = await self._auth(inter)
         if not vc: return
@@ -322,7 +322,7 @@ class VoiceControlView(discord.ui.View):
         upd_room(inter.guild_id, self.vc_id, hidden=True)
         await self._reply(inter, f"{EMOJI['hide']} Room **hidden** from everyone.")
 
-    @discord.ui.button(style=discord.ButtonStyle.secondary, custom_id="vc_show_0",   row=0)
+    @discord.ui.button(emoji=EMOJI["show"], style=discord.ButtonStyle.secondary, custom_id="vc_show_0",   row=0)
     async def btn_show(self, inter: discord.Interaction, _):
         vc, rd = await self._auth(inter)
         if not vc: return
@@ -333,7 +333,7 @@ class VoiceControlView(discord.ui.View):
         await self._reply(inter, f"{EMOJI['show']} Room **visible** again.")
 
     # ── Row 2 ─────────────────────────────────────────────────────────────────
-    @discord.ui.button(style=discord.ButtonStyle.secondary, custom_id="vc_limit_0",  row=1)
+    @discord.ui.button(emoji=EMOJI["limit"], style=discord.ButtonStyle.secondary, custom_id="vc_limit_0",  row=1)
     async def btn_limit(self, inter: discord.Interaction, _):
         vc, rd = await self._auth(inter)
         if not vc: return
@@ -347,7 +347,7 @@ class VoiceControlView(discord.ui.View):
             await inter2.response.send_message(f"{EMOJI['limit']} Limit set to **{'Unlimited' if n==0 else n}**.", ephemeral=True)
         await inter.response.send_modal(_TextModal("Set Limit", "Max members (0=unlimited)", "0–99", cb))
 
-    @discord.ui.button(style=discord.ButtonStyle.secondary, custom_id="vc_invite_0", row=1)
+    @discord.ui.button(emoji=EMOJI["invite"], style=discord.ButtonStyle.secondary, custom_id="vc_invite_0", row=1)
     async def btn_invite(self, inter: discord.Interaction, _):
         vc, rd = await self._auth(inter)
         if not vc: return
@@ -364,7 +364,7 @@ class VoiceControlView(discord.ui.View):
             await inter2.response.send_message(f"{EMOJI['invite']} **{m.display_name}** invited.", ephemeral=True)
         await inter.response.send_modal(_IDModal("Invite Member", cb))
 
-    @discord.ui.button(style=discord.ButtonStyle.danger,     custom_id="vc_ban_0",   row=1)
+    @discord.ui.button(emoji=EMOJI["ban"], style=discord.ButtonStyle.danger,     custom_id="vc_ban_0",   row=1)
     async def btn_ban(self, inter: discord.Interaction, _):
         vc, rd = await self._auth(inter)
         if not vc: return
@@ -382,7 +382,7 @@ class VoiceControlView(discord.ui.View):
             await inter2.response.send_message(f"{EMOJI['ban']} **{m.display_name}** banned from room.", ephemeral=True)
         await inter.response.send_modal(_IDModal("Ban Member", cb))
 
-    @discord.ui.button(style=discord.ButtonStyle.success,    custom_id="vc_permit_0", row=1)
+    @discord.ui.button(emoji=EMOJI["permit"], style=discord.ButtonStyle.success,    custom_id="vc_permit_0", row=1)
     async def btn_permit(self, inter: discord.Interaction, _):
         vc, rd = await self._auth(inter)
         if not vc: return
@@ -400,7 +400,7 @@ class VoiceControlView(discord.ui.View):
         await inter.response.send_modal(_IDModal("Permit Member", cb))
 
     # ── Row 3 ─────────────────────────────────────────────────────────────────
-    @discord.ui.button(style=discord.ButtonStyle.secondary, custom_id="vc_rename_0",  row=2)
+    @discord.ui.button(emoji=EMOJI["rename"], style=discord.ButtonStyle.secondary, custom_id="vc_rename_0",  row=2)
     async def btn_rename(self, inter: discord.Interaction, _):
         vc, rd = await self._auth(inter)
         if not vc: return
@@ -409,7 +409,7 @@ class VoiceControlView(discord.ui.View):
             await inter2.response.send_message(f"{EMOJI['rename']} Room renamed to **{val}**.", ephemeral=True)
         await inter.response.send_modal(_TextModal("Rename Room", "New name", "e.g. Gaming Night", cb))
 
-    @discord.ui.button(style=discord.ButtonStyle.secondary, custom_id="vc_bitrate_0", row=2)
+    @discord.ui.button(emoji=EMOJI["bitrate"], style=discord.ButtonStyle.secondary, custom_id="vc_bitrate_0", row=2)
     async def btn_bitrate(self, inter: discord.Interaction, _):
         vc, rd = await self._auth(inter)
         if not vc: return
@@ -423,7 +423,7 @@ class VoiceControlView(discord.ui.View):
             await inter2.response.send_message(f"{EMOJI['bitrate']} Bitrate set to **{n} kbps**.", ephemeral=True)
         await inter.response.send_modal(_TextModal("Set Bitrate", "Bitrate in kbps", "8–384 (default 64)", cb))
 
-    @discord.ui.button(style=discord.ButtonStyle.secondary, custom_id="vc_region_0",  row=2)
+    @discord.ui.button(emoji=EMOJI["region"], style=discord.ButtonStyle.secondary, custom_id="vc_region_0",  row=2)
     async def btn_region(self, inter: discord.Interaction, _):
         vc, rd = await self._auth(inter)
         if not vc: return
@@ -442,7 +442,7 @@ class VoiceControlView(discord.ui.View):
         v = discord.ui.View(timeout=60); v.add_item(select)
         await inter.response.send_message(f"{EMOJI['region']} Choose a region:", view=v, ephemeral=True)
 
-    @discord.ui.button(style=discord.ButtonStyle.secondary, custom_id="vc_template_0", row=2)
+    @discord.ui.button(emoji=EMOJI["template"], style=discord.ButtonStyle.secondary, custom_id="vc_template_0", row=2)
     async def btn_template(self, inter: discord.Interaction, _):
         vc, rd = await self._auth(inter)
         if not vc: return
@@ -472,7 +472,7 @@ class VoiceControlView(discord.ui.View):
         await inter.response.send_message(f"{EMOJI['template']} Choose a template:", view=v, ephemeral=True)
 
     # ── Row 4 ─────────────────────────────────────────────────────────────────
-    @discord.ui.button(style=discord.ButtonStyle.primary,  custom_id="vc_claim_0",    row=3)
+    @discord.ui.button(emoji=EMOJI["claim"], style=discord.ButtonStyle.primary,  custom_id="vc_claim_0",    row=3)
     async def btn_claim(self, inter: discord.Interaction, _):
         rd = get_room(inter.guild_id, self.vc_id)
         if not rd: await inter.response.send_message(f"{EMOJI['ban']} Room not found.", ephemeral=True); return
@@ -491,7 +491,7 @@ class VoiceControlView(discord.ui.View):
         else:
             await inter.response.send_message(f"{EMOJI['ban']} You must be in the room to claim it.", ephemeral=True)
 
-    @discord.ui.button(style=discord.ButtonStyle.primary,  custom_id="vc_transfer_0", row=3)
+    @discord.ui.button(emoji=EMOJI["transfer"], style=discord.ButtonStyle.primary,  custom_id="vc_transfer_0", row=3)
     async def btn_transfer(self, inter: discord.Interaction, _):
         vc, rd = await self._auth(inter)
         if not vc: return
@@ -507,7 +507,7 @@ class VoiceControlView(discord.ui.View):
             await inter2.response.send_message(f"{EMOJI['transfer']} Room transferred to **{m.display_name}**.", ephemeral=True)
         await inter.response.send_modal(_IDModal("Transfer Ownership", cb))
 
-    @discord.ui.button(style=discord.ButtonStyle.secondary, custom_id="vc_waiting_0", row=3)
+    @discord.ui.button(emoji=EMOJI["waiting"], style=discord.ButtonStyle.secondary, custom_id="vc_waiting_0", row=3)
     async def btn_waiting(self, inter: discord.Interaction, _):
         vc, rd = await self._auth(inter)
         if not vc: return
@@ -520,7 +520,7 @@ class VoiceControlView(discord.ui.View):
         else:
             await inter.response.send_message(f"{EMOJI['ban']} Panel channel not found.", ephemeral=True)
 
-    @discord.ui.button(style=discord.ButtonStyle.danger,   custom_id="vc_del_0",     row=3)
+    @discord.ui.button(emoji=EMOJI["delete"], style=discord.ButtonStyle.danger,   custom_id="vc_del_0",     row=3)
     async def btn_delete(self, inter: discord.Interaction, _):
         vc, rd = await self._auth(inter)
         if not vc: return
