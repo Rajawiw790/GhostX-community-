@@ -876,12 +876,7 @@ class ConditionsModal(discord.ui.Modal, title="📋 Set Conditions"):
     conditions_field = discord.ui.TextInput(
         label="Conditions — one per line",
         style=discord.TextStyle.paragraph,
-        placeholder=(
-            "You must be active in the community.\n"
-            "Good knowledge of server rules and etiquette.\n"
-            "Minimum age of 15 years old.\n"
-            "(add or remove lines freely)"
-        ),
+        placeholder="One condition per line, e.g.\nYou must be active in the community.",
         max_length=4000,
         required=True,
     )
@@ -952,10 +947,7 @@ class DMMessageModal(discord.ui.Modal, title="📨 Set DM Intro Message"):
     message_field = discord.ui.TextInput(
         label="Message sent in DM before questions",
         style=discord.TextStyle.paragraph,
-        placeholder=(
-            "Welcome to {server}! I'll ask you {count} question(s) here, "
-            "one at a time. You have {minutes} minutes per question."
-        ),
+        placeholder="Welcome to {server}! You have {minutes} min per question ({count} total).",
         max_length=1000,
         required=False,
     )
