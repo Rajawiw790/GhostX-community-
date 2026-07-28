@@ -19,8 +19,25 @@ from discord import app_commands
 
 import config
 import db
+from cogs import emoji_loader
 
 PROTECTION_COLLECTION = "protection_settings"
+
+# ─── real FastLife emojis used across this cog — resolved live from
+# Application Emojis by name; unicode only kicks in as a last-resort
+# fallback if that emoji isn't loaded/found ──────────────────────────────
+PROT_EMOJI = emoji_loader.TextEmojiMap({
+    "spam": ("11838warning", "🚫"),
+    "link": ("50494lien", "🔗"),
+    "invite": ("20806partnerids", "📩"),
+    "bot": ("95805bot", "🤖"),
+    "shield": ("45228cybersecurite", "🛡️"),
+    "logs": ("84439logs", "📋"),
+    "success": ("60226check", "✅"),
+    "error": ("8118xmark", "❌"),
+    "warning": ("11838warning", "⚠️"),
+    "kick": ("78507punishment", "👢"),
+})
 
 LINK_REGEX = re.compile(r"(https?://\S+|www\.\S+|discord\.gg/\S+|discordapp\.com/invite/\S+)", re.IGNORECASE)
 INVITE_REGEX = re.compile(r"(discord\.gg/\S+|discord(?:app)?\.com/invite/\S+)", re.IGNORECASE)
@@ -208,10 +225,10 @@ class Protection(commands.Cog):
 
             try:
                 if action == "kick":
-                    warn_txt = f"📩 {message.author.mention} تّطرد من السيرفر (تجاوز {max_warnings} تحذيرات ديال الدعوات)."
+                    warn_txt = f"{PROT_EMOJI['invite']} {message.author.mention} تّطرد من السيرفر (تجاوز {max_warnings} تحذيرات ديال الدعوات)."
                 else:
                     warn_txt = (
-                        f"📩 {message.author.mention} روابط الدعوة ممنوعة! "
+                        f"{PROT_EMOJI['invite']} {message.author.mention} روابط الدعوة ممنوعة! "
                         f"تحذير {count}/{max_warnings} — تّبنّن مؤقتا."
                     )
                 await message.channel.send(warn_txt, delete_after=8)
@@ -219,7 +236,7 @@ class Protection(commands.Cog):
                 pass
 
             embed = discord.Embed(
-                title="📩 Anti-Invite Triggered",
+                title=f"{PROT_EMOJI['invite']} Anti-Invite Triggered",
                 description=(
                     f"**User:** {message.author.mention}\n"
                     f"**Channel:** {message.channel.mention}\n"
@@ -249,10 +266,10 @@ class Protection(commands.Cog):
 
             try:
                 if action == "kick":
-                    warn_txt = f"🔗 {message.author.mention} تّطرد من السيرفر (تجاوز {max_warnings} تحذيرات ديال الروابط)."
+                    warn_txt = f"{PROT_EMOJI['link']} {message.author.mention} تّطرد من السيرفر (تجاوز {max_warnings} تحذيرات ديال الروابط)."
                 else:
                     warn_txt = (
-                        f"🔗 {message.author.mention} الروابط ممنوعة! "
+                        f"{PROT_EMOJI['link']} {message.author.mention} الروابط ممنوعة! "
                         f"تحذير {count}/{max_warnings} — تّبنّن مؤقتا."
                     )
                 await message.channel.send(warn_txt, delete_after=8)
@@ -260,7 +277,7 @@ class Protection(commands.Cog):
                 pass
 
             embed = discord.Embed(
-                title="🔗 Anti-Link Triggered",
+                title=f"{PROT_EMOJI['link']} Anti-Link Triggered",
                 description=(
                     f"**User:** {message.author.mention}\n"
                     f"**Channel:** {message.channel.mention}\n"
@@ -296,10 +313,10 @@ class Protection(commands.Cog):
 
                 try:
                     if action == "kick":
-                        warn_txt = f"🚫 {message.author.mention} تّطرد من السيرفر (تجاوز {max_warnings} تحذيرات ديال الفلود)."
+                        warn_txt = f"{PROT_EMOJI['spam']} {message.author.mention} تّطرد من السيرفر (تجاوز {max_warnings} تحذيرات ديال الفلود)."
                     else:
                         warn_txt = (
-                            f"🚫 {message.author.mention} تسالا! "
+                            f"{PROT_EMOJI['spam']} {message.author.mention} تسالا! "
                             f"تحذير {count}/{max_warnings} — تّبنّن مؤقتا."
                         )
                     await message.channel.send(warn_txt, delete_after=8)
@@ -307,7 +324,7 @@ class Protection(commands.Cog):
                     pass
 
                 embed = discord.Embed(
-                    title="🚫 Anti-Spam Triggered",
+                    title=f"{PROT_EMOJI['spam']} Anti-Spam Triggered",
                     description=(
                         f"**User:** {message.author.mention}\n"
                         f"**Channel:** {message.channel.mention}\n"
@@ -342,7 +359,7 @@ class Protection(commands.Cog):
             return
 
         embed = discord.Embed(
-            title="🤖 Anti-Bot Triggered",
+            title=f"{PROT_EMOJI['bot']} Anti-Bot Triggered",
             description=f"**Bot:** {member.mention} (`{member.id}`)\n**Action:** `{action}`",
             color=config.ERROR_COLOR,
         )
@@ -416,7 +433,7 @@ class Protection(commands.Cog):
         await interaction.response.send_message(embed=self._antispam_embed(gcfg["antispam"]), ephemeral=True)
 
     def _antispam_embed(self, sub: dict) -> discord.Embed:
-        e = discord.Embed(title="🚫 Anti-Spam Settings", color=config.SUCCESS_COLOR)
+        e = discord.Embed(title=f"{PROT_EMOJI['spam']} Anti-Spam Settings", color=config.SUCCESS_COLOR)
         e.add_field(name="Status", value="✅ ON" if sub.get("enabled") else "❌ OFF", inline=True)
         e.add_field(name="Limit", value=f"{sub.get('limit')} msgs / {sub.get('interval')}s", inline=True)
         e.add_field(name="Mute Duration", value=f"{sub.get('mute_duration')}s", inline=True)
@@ -479,4 +496,242 @@ class Protection(commands.Cog):
         self._save_guild_cfg(interaction.guild_id, gcfg)
         await interaction.response.send_message("✅ تم تحديث اللائحة البيضاء.", ephemeral=True)
 
-    @antilink_group.command(name="status
+    @antilink_group.command(name="status", description="📊 Show anti-link settings")
+    async def antilink_status(self, interaction: discord.Interaction):
+        gcfg = self._get_guild_cfg(interaction.guild_id)
+        await interaction.response.send_message(embed=self._antilink_embed(gcfg["antilink"]), ephemeral=True)
+
+    def _antilink_embed(self, sub: dict) -> discord.Embed:
+        e = discord.Embed(title=f"{PROT_EMOJI['link']} Anti-Link Settings", color=config.SUCCESS_COLOR)
+        e.add_field(name="Status", value="✅ ON" if sub.get("enabled") else "❌ OFF", inline=True)
+        e.add_field(name="Mute Duration", value=f"{sub.get('mute_duration')}s", inline=True)
+        e.add_field(name="Max Warnings", value=f"{sub.get('max_warnings')} (then kick)", inline=True)
+        e.add_field(name="Whitelisted Roles", value=str(len(sub.get("whitelist_roles", []))), inline=True)
+        e.add_field(name="Whitelisted Channels", value=str(len(sub.get("whitelist_channels", []))), inline=True)
+        return e
+
+    # ═══════════════════════════ /antiinvite ═══════════════════════════════════
+    @antiinvite_group.command(name="enable", description="✅ Enable anti-invite")
+    async def antiinvite_enable(self, interaction: discord.Interaction):
+        gcfg = self._get_guild_cfg(interaction.guild_id)
+        gcfg["antiinvite"]["enabled"] = True
+        self._save_guild_cfg(interaction.guild_id, gcfg)
+        await interaction.response.send_message("✅ Anti-Invite فعّال دابا.", ephemeral=True)
+
+    @antiinvite_group.command(name="disable", description="❌ Disable anti-invite")
+    async def antiinvite_disable(self, interaction: discord.Interaction):
+        gcfg = self._get_guild_cfg(interaction.guild_id)
+        gcfg["antiinvite"]["enabled"] = False
+        self._save_guild_cfg(interaction.guild_id, gcfg)
+        await interaction.response.send_message("❌ Anti-Invite متوقف دابا.", ephemeral=True)
+
+    @antiinvite_group.command(name="config", description="⚙️ Configure anti-invite escalation")
+    @app_commands.describe(
+        mute_duration="Timeout duration per warning, in seconds (default 300)",
+        max_warnings="How many warnings before a kick (default 3)",
+    )
+    async def antiinvite_config(
+        self,
+        interaction: discord.Interaction,
+        mute_duration: int = None,
+        max_warnings: int = None,
+    ):
+        gcfg = self._get_guild_cfg(interaction.guild_id)
+        if mute_duration is not None: gcfg["antiinvite"]["mute_duration"] = mute_duration
+        if max_warnings is not None:  gcfg["antiinvite"]["max_warnings"] = max_warnings
+        self._save_guild_cfg(interaction.guild_id, gcfg)
+        await interaction.response.send_message(embed=self._antiinvite_embed(gcfg["antiinvite"]), ephemeral=True)
+
+    @antiinvite_group.command(name="whitelist", description="🛡️ Whitelist a role or channel from anti-invite")
+    @app_commands.describe(role="Role to whitelist (optional)", channel="Channel to whitelist (optional)", remove="Remove instead of add")
+    async def antiinvite_whitelist(
+        self,
+        interaction: discord.Interaction,
+        role: discord.Role = None,
+        channel: discord.TextChannel = None,
+        remove: bool = False,
+    ):
+        gcfg = self._get_guild_cfg(interaction.guild_id)
+        sub = gcfg["antiinvite"]
+        if role:
+            lst = sub.setdefault("whitelist_roles", [])
+            if remove and role.id in lst: lst.remove(role.id)
+            elif not remove and role.id not in lst: lst.append(role.id)
+        if channel:
+            lst = sub.setdefault("whitelist_channels", [])
+            if remove and channel.id in lst: lst.remove(channel.id)
+            elif not remove and channel.id not in lst: lst.append(channel.id)
+        self._save_guild_cfg(interaction.guild_id, gcfg)
+        await interaction.response.send_message("✅ تم تحديث اللائحة البيضاء.", ephemeral=True)
+
+    @antiinvite_group.command(name="status", description="📊 Show anti-invite settings")
+    async def antiinvite_status(self, interaction: discord.Interaction):
+        gcfg = self._get_guild_cfg(interaction.guild_id)
+        await interaction.response.send_message(embed=self._antiinvite_embed(gcfg["antiinvite"]), ephemeral=True)
+
+    def _antiinvite_embed(self, sub: dict) -> discord.Embed:
+        e = discord.Embed(title=f"{PROT_EMOJI['invite']} Anti-Invite Settings", color=config.SUCCESS_COLOR)
+        e.add_field(name="Status", value="✅ ON" if sub.get("enabled") else "❌ OFF", inline=True)
+        e.add_field(name="Mute Duration", value=f"{sub.get('mute_duration')}s", inline=True)
+        e.add_field(name="Max Warnings", value=f"{sub.get('max_warnings')} (then kick)", inline=True)
+        e.add_field(name="Whitelisted Roles", value=str(len(sub.get("whitelist_roles", []))), inline=True)
+        e.add_field(name="Whitelisted Channels", value=str(len(sub.get("whitelist_channels", []))), inline=True)
+        return e
+
+    # ═══════════════════════════ /antibot ═════════════════════════════════════
+    @antibot_group.command(name="enable", description="✅ Enable anti-bot")
+    async def antibot_enable(self, interaction: discord.Interaction):
+        gcfg = self._get_guild_cfg(interaction.guild_id)
+        gcfg["antibot"]["enabled"] = True
+        self._save_guild_cfg(interaction.guild_id, gcfg)
+        await interaction.response.send_message("✅ Anti-Bot فعّال دابا. أي بوت يدخل بلا ترخيص غادي يتّطرد.", ephemeral=True)
+
+    @antibot_group.command(name="disable", description="❌ Disable anti-bot")
+    async def antibot_disable(self, interaction: discord.Interaction):
+        gcfg = self._get_guild_cfg(interaction.guild_id)
+        gcfg["antibot"]["enabled"] = False
+        self._save_guild_cfg(interaction.guild_id, gcfg)
+        await interaction.response.send_message("❌ Anti-Bot متوقف دابا.", ephemeral=True)
+
+    @antibot_group.command(name="action", description="⚙️ Set what happens when an unauthorized bot joins")
+    @app_commands.choices(action=[
+        app_commands.Choice(name="Kick", value="kick"),
+        app_commands.Choice(name="Ban", value="ban"),
+    ])
+    async def antibot_action(self, interaction: discord.Interaction, action: app_commands.Choice[str]):
+        gcfg = self._get_guild_cfg(interaction.guild_id)
+        gcfg["antibot"]["action"] = action.value
+        self._save_guild_cfg(interaction.guild_id, gcfg)
+        await interaction.response.send_message(f"✅ Action تبدلات لـ `{action.value}`.", ephemeral=True)
+
+    @antibot_group.command(name="whitelist", description="🛡️ Allow a specific bot to join without being kicked")
+    @app_commands.describe(bot_id="The bot's user ID", remove="Remove instead of add")
+    async def antibot_whitelist(self, interaction: discord.Interaction, bot_id: str, remove: bool = False):
+        gcfg = self._get_guild_cfg(interaction.guild_id)
+        try:
+            bid = int(bot_id)
+        except ValueError:
+            await interaction.response.send_message("❌ ID غير صحيح.", ephemeral=True)
+            return
+        lst = gcfg["antibot"].setdefault("whitelist_ids", [])
+        if remove and bid in lst:
+            lst.remove(bid)
+        elif not remove and bid not in lst:
+            lst.append(bid)
+        self._save_guild_cfg(interaction.guild_id, gcfg)
+        action = "تنحات" if remove else "تزادت"
+        await interaction.response.send_message(f"✅ البوت `{bid}` {action} من اللائحة البيضاء.", ephemeral=True)
+
+    # ═══════════════════════════ /warnings ════════════════════════════════════
+    @warnings_group.command(name="check", description="🔍 Check a member's current spam/link warning count")
+    @app_commands.describe(member="The member to check")
+    async def warnings_check(self, interaction: discord.Interaction, member: discord.Member):
+        key = (interaction.guild_id, member.id)
+        w = self.warnings.get(key, {})
+        e = discord.Embed(title=f"⚠️ Warnings — {member.display_name}", color=config.SUCCESS_COLOR)
+        e.add_field(name="Anti-Spam", value=str(w.get("antispam", 0)), inline=True)
+        e.add_field(name="Anti-Link", value=str(w.get("antilink", 0)), inline=True)
+        await interaction.response.send_message(embed=e, ephemeral=True)
+
+    @warnings_group.command(name="reset", description="🔄 Reset a member's spam/link warnings")
+    @app_commands.describe(member="The member to reset")
+    async def warnings_reset(self, interaction: discord.Interaction, member: discord.Member):
+        key = (interaction.guild_id, member.id)
+        if key in self.warnings:
+            self.warnings[key] = defaultdict(int)
+        await interaction.response.send_message(f"✅ تم تصفير التحذيرات ديال {member.mention}.", ephemeral=True)
+
+    # ─── config command (shared log channel) ────────────────────────────────
+    @app_commands.command(name="protectionlog", description="📋 Set the log channel for protection events")
+    @app_commands.default_permissions(administrator=True)
+    @app_commands.describe(channel="Channel where protection logs will be sent")
+    async def protection_log(self, interaction: discord.Interaction, channel: discord.TextChannel):
+        gcfg = self._get_guild_cfg(interaction.guild_id)
+        gcfg["log_channel_id"] = channel.id
+        self._save_guild_cfg(interaction.guild_id, gcfg)
+        await interaction.response.send_message(f"✅ Log channel تبدل لـ {channel.mention}.", ephemeral=True)
+
+    # ═══════════════════ /enable & /disable — unified menu ═════════════════════
+    # بدل ما تفتكر /antispam enable, /antilink enable, /antibot enable... بوحدهم،
+    # هاد الأمرين كيبينو ليك لائحة اختيار (dropdown) فيها كل أنظمة الحماية
+    # مرة وحدة، وتقدر تفعّل/توقف أي واحد منهم بضغطة وحدة.
+    @app_commands.command(name="enable", description="✅ فعّل أي نظام حماية من قائمة")
+    @app_commands.default_permissions(administrator=True)
+    async def enable_cmd(self, interaction: discord.Interaction):
+        gcfg = self._get_guild_cfg(interaction.guild_id)
+        await interaction.response.send_message(
+            "اختار الحماية لي بغيتي تفعّلها 👇",
+            view=ProtectionToggleView(self, gcfg, turn_on=True),
+            ephemeral=True,
+        )
+
+    @app_commands.command(name="disable", description="❌ وقّف أي نظام حماية من قائمة")
+    @app_commands.default_permissions(administrator=True)
+    async def disable_cmd(self, interaction: discord.Interaction):
+        gcfg = self._get_guild_cfg(interaction.guild_id)
+        await interaction.response.send_message(
+            "اختار الحماية لي بغيتي توقفها 👇",
+            view=ProtectionToggleView(self, gcfg, turn_on=False),
+            ephemeral=True,
+        )
+
+
+# أنظمة الحماية المتوفرة فـ القائمة الموحدة — key هو المفتاح فـ الـ config،
+# label/emoji/description هوما اللي كيبانو للمستخدم فـ الـ dropdown.
+PROTECTION_SYSTEMS = [
+    {"key": "antispam",   "label": "Anti-Spam",   "emoji": "🚫", "app_emoji": "11838warning",    "description": "منع الفلود/السبام فـ الشات"},
+    {"key": "antilink",   "label": "Anti-Link",   "emoji": "🔗", "app_emoji": "50494lien",        "description": "منع الروابط (بلا دعوات ديسكورد)"},
+    {"key": "antiinvite", "label": "Anti-Invite", "emoji": "📩", "app_emoji": "20806partnerids",  "description": "منع روابط الدعوة ديال سيرفرات أخرى"},
+    {"key": "antibot",    "label": "Anti-Bot",    "emoji": "🤖", "app_emoji": "95805bot",         "description": "طرد/حظر أي بوت غير مرخص منين يدخل"},
+]
+
+
+class ProtectionToggleView(discord.ui.View):
+    def __init__(self, cog: "Protection", gcfg: dict, turn_on: bool):
+        super().__init__(timeout=60)
+        self.cog = cog
+        self.gcfg = gcfg
+        self.turn_on = turn_on
+        self.add_item(ProtectionSelect(cog, gcfg, turn_on))
+
+
+class ProtectionSelect(discord.ui.Select):
+    def __init__(self, cog: "Protection", gcfg: dict, turn_on: bool):
+        self.cog = cog
+        self.turn_on = turn_on
+        options = [
+            discord.SelectOption(
+                label=sys["label"],
+                value=sys["key"],
+                description=sys["description"],
+                emoji=emoji_loader.get_obj(sys["app_emoji"]) or sys["emoji"],
+                default=(gcfg.get(sys["key"], {}).get("enabled") is turn_on),
+            )
+            for sys in PROTECTION_SYSTEMS
+        ]
+        super().__init__(
+            placeholder="اختار نظام الحماية...",
+            options=options,
+            min_values=1,
+            max_values=len(options),
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+        gcfg = self.cog._get_guild_cfg(interaction.guild_id)
+        changed = []
+        for key in self.values:
+            gcfg.setdefault(key, {})["enabled"] = self.turn_on
+            sys = next(s for s in PROTECTION_SYSTEMS if s["key"] == key)
+            e = emoji_loader.get_obj(sys["app_emoji"]) or sys["emoji"]
+            changed.append(f"{e} {sys['label']}")
+        self.cog._save_guild_cfg(interaction.guild_id, gcfg)
+
+        state = "✅ تفعّلو" if self.turn_on else "❌ توقفو"
+        await interaction.response.edit_message(
+            content=f"{state}: {', '.join(changed)}",
+            view=None,
+        )
+
+
+async def setup(bot):
+    await bot.add_cog(Protection(bot))
