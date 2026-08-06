@@ -76,9 +76,18 @@ def _can_close_ticket(member: discord.Member, channel: discord.TextChannel, cfg:
     return _is_support_staff(member, cfg)
 
 
+# ── Discord only allows these 4 button colors (no custom hex) ──────────────
+STYLE_MAP = {
+    "primary": discord.ButtonStyle.primary,      # Blurple
+    "secondary": discord.ButtonStyle.secondary,  # Gray
+    "success": discord.ButtonStyle.success,      # Green
+    "danger": discord.ButtonStyle.danger,        # Red
+}
+
 BUTTON_DEFAULTS = {
     "open_label":  "Open Ticket",
     "open_emoji":  "📩",
+    "open_style":  "primary",
     "close_label": "Close",
     "close_emoji": "🔒",
     "claim_label": "Claim",
@@ -167,11 +176,12 @@ async def _create_ticket(interaction: discord.Interaction, problem_text: str):
         await interaction.followup.send(f"❌ Failed to create ticket channel: {e}", ephemeral=True)
         return
 
-    # ── Build the ticket embed — kept short on purpose: one field, one
-    #    emoji (the title), reason leads as the description. ──
-    note_text = cfg.get("panel_message") or panel_settings.render(panel_settings.get("ticket_instructions_text")) or (
-        "Please write what you need — our team will be with you shortly."
-    )
+    # ── Build the ticket embed ──────────────────────────────────────────
+    # NOTE: this note is intentionally SHORT and SEPARATE from the panel's
+    # "Need help? / Please: ..." instructions block — it used to reuse
+    # panel_message / ticket_instructions_text (and even the panel banner),
+    # which duplicated the whole panel post inside every opened ticket.
+    note_text = cfg.get("ticket_note") or "Our team will be with you shortly."
     reason_label = panel_settings.get("ticket_reason_label") or "Ticket Reason"
 
     opened_line = f"{interaction.user.mention} • <t:{int(datetime.now().timestamp())}:R>"
@@ -185,10 +195,8 @@ async def _create_ticket(interaction: discord.Interaction, problem_text: str):
         timestamp=datetime.now(),
     )
     embed.set_thumbnail(url=interaction.user.display_avatar.url)
-
-    banner_url = cfg.get("banner_url") or ""
-    if banner_url:
-        embed.set_image(url=banner_url)
+    # banner_url is intentionally NOT set here anymore — it stays on the
+    # panel post only, so it's not duplicated in every ticket channel.
 
     embed.add_field(name="Opened by", value=opened_line, inline=False)
     embed.add_field(name="Note", value=note_text[:200], inline=False)
@@ -230,7 +238,7 @@ class TicketCreateView(discord.ui.View):
         button = discord.ui.Button(
             label=btn["open_label"],
             emoji=btn["open_emoji"],
-            style=discord.ButtonStyle.primary,
+            style=STYLE_MAP.get(btn.get("open_style", "primary"), discord.ButtonStyle.primary),
             custom_id="ticket_open"
         )
         button.callback = self.open_ticket
@@ -506,8 +514,8 @@ class Tickets(commands.Cog):
         support_role="Role that can see and claim tickets (optional)",
         log_channel="Channel where closed ticket transcripts are sent (optional)",
         panel_title="Title of the panel embed (optional)",
-        panel_message="Panel embed description, also shown inside opened tickets (optional)",
-        banner_url="Banner image URL for the ticket embed (optional)",
+        panel_message="Panel embed description (optional)",
+        banner_url="Banner image URL for the panel embed (optional)",
     )
     async def ticket_setup(
         self,
@@ -530,6 +538,10 @@ class Tickets(commands.Cog):
             "banner_url": banner_url or "",
         }
         ts = load_tickets()
+        # keep ticket_note if it was already set via /ticket customize
+        existing = ts.get(str(interaction.guild_id), {})
+        if "ticket_note" in existing:
+            cfg["ticket_note"] = existing["ticket_note"]
         ts[str(interaction.guild_id)] = cfg
         save_tickets(ts)
 
@@ -558,8 +570,8 @@ class Tickets(commands.Cog):
         support_role="New support role (optional)",
         log_channel="New transcript log channel (optional)",
         panel_title="New panel embed title (optional)",
-        panel_message="New panel description, also shown inside tickets (optional)",
-        banner_url="New banner image URL (optional)",
+        panel_message="New panel description (optional)",
+        banner_url="New banner image URL for the panel embed (optional)",
     )
     async def ticket_update(
         self,
@@ -610,41 +622,58 @@ class Tickets(commands.Cog):
         embed.set_footer(text=f"{config.BOT_NAME} | Dev: {config.DEVELOPER}")
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
-    # ─── /ticket customize — button labels/emoji + instructions text ───────
-    @ticket_group.command(name="customize", description="🎨 Customize ticket button labels/emoji and the instructions text")
+    # ─── /ticket customize — button labels/emoji/color + short ticket note ─
+    @ticket_group.command(name="customize", description="🎨 Customize ticket buttons (label/emoji/color) and the short note shown inside tickets")
     @app_commands.describe(
         open_label="Open-ticket button label (optional)", open_emoji="Open-ticket button emoji (optional)",
+        open_style="Open-ticket button color (optional)",
         claim_label="Claim button label (optional)", claim_emoji="Claim button emoji (optional)",
         close_label="Close button label (optional)", close_emoji="Close button emoji (optional)",
-        instructions_text="Important-instructions text shown in every ticket (optional)",
+        ticket_note="Short note shown inside every opened ticket, NOT the panel text (optional)",
     )
+    @app_commands.choices(open_style=[
+        app_commands.Choice(name="Blurple", value="primary"),
+        app_commands.Choice(name="Gray", value="secondary"),
+        app_commands.Choice(name="Green", value="success"),
+        app_commands.Choice(name="Red", value="danger"),
+    ])
     async def ticket_customize(
         self,
         interaction: discord.Interaction,
         open_label: str = None, open_emoji: str = None,
+        open_style: app_commands.Choice[str] = None,
         claim_label: str = None, claim_emoji: str = None,
         close_label: str = None, close_emoji: str = None,
-        instructions_text: str = None,
+        ticket_note: str = None,
     ):
-        if not any([open_label, open_emoji, claim_label, claim_emoji, close_label, close_emoji, instructions_text]):
+        if not any([open_label, open_emoji, open_style, claim_label, claim_emoji, close_label, close_emoji, ticket_note]):
             await interaction.response.send_message("❌ Provide at least one field to change.", ephemeral=True)
             return
 
         btn = load_btn()
         if open_label:  btn["open_label"] = open_label
         if open_emoji:  btn["open_emoji"] = open_emoji
+        if open_style:  btn["open_style"] = open_style.value
         if claim_label: btn["claim_label"] = claim_label
         if claim_emoji: btn["claim_emoji"] = claim_emoji
         if close_label: btn["close_label"] = close_label
         if close_emoji: btn["close_emoji"] = close_emoji
         save_btn(btn)
 
-        if instructions_text:
-            panel_settings.set_values(ticket_instructions_text=instructions_text)
+        if ticket_note:
+            ts = load_tickets()
+            guild_id = str(interaction.guild_id)
+            cfg = ts.get(guild_id, {})
+            cfg["ticket_note"] = ticket_note
+            ts[guild_id] = cfg
+            save_tickets(ts)
 
         embed = discord.Embed(
             title="✅ Ticket Panel Customized",
-            description="Changes apply next time `/ticket setup` posts a panel, or to newly opened tickets.",
+            description=(
+                "Button changes apply next time `/ticket setup` posts a new panel.\n"
+                "The ticket note applies to newly opened tickets."
+            ),
             color=config.SUCCESS_COLOR
         )
         await interaction.response.send_message(embed=embed, ephemeral=True)
