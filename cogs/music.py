@@ -165,7 +165,7 @@ class MusicControlView(discord.ui.View):
         player: wavelink.Player = interaction.guild.voice_client
         gq = get_queue(interaction.guild.id)
         if not player:
-            await interaction.response.send_message("❌ البوت مش في روم صوتي!", ephemeral=True)
+            await interaction.response.send_message("❌ bot mkhynch f voice!", ephemeral=True)
             return
         gq.queue.clear()
         gq.current = None
@@ -193,7 +193,7 @@ class Music(commands.Cog):
     async def _ensure_voice(self, interaction: discord.Interaction) -> "wavelink.Player | None":
         if not interaction.user.voice:
             await interaction.followup.send(
-                embed=discord.Embed(description="❌ كن في روم صوتي أولاً!", color=config.ERROR_COLOR),
+                embed=discord.Embed(description="❌ khask tkon f voice channel!", color=config.ERROR_COLOR),
             )
             return None
         vc_ch = interaction.user.voice.channel
@@ -210,9 +210,8 @@ class Music(commands.Cog):
             await interaction.followup.send(
                 embed=discord.Embed(
                     description=(
-                        f"❌ ما قدرتش نتصل بالروم الصوتي: `{e}`\n"
-                        "-# إلا كانت هاد المشكلة عاودة تصاوب، تأكد بلي Lavalink node خدامة."
-                    ),
+                        f"❌ error voice: `{e}`\n"
+                        "-# sbr t9ad),
                     color=config.ERROR_COLOR,
                 ),
             )
