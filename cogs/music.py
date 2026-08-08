@@ -89,7 +89,7 @@ class MusicControlView(discord.ui.View):
     async def pause_resume(self, interaction: discord.Interaction, button: discord.ui.Button):
         player: wavelink.Player = interaction.guild.voice_client
         if not player or not player.playing:
-            await interaction.response.send_message("❌ لا توجد أغنية تشتغل!", ephemeral=True)
+            await interaction.response.send_message("❌ No song is playing!", ephemeral=True)
             return
         await player.pause(not player.paused)
         await interaction.response.defer()
@@ -100,7 +100,7 @@ class MusicControlView(discord.ui.View):
         player: wavelink.Player = interaction.guild.voice_client
         gq = get_queue(interaction.guild.id)
         if not player or not gq.current:
-            await interaction.response.send_message("❌ لا توجد أغنية تشتغل!", ephemeral=True)
+            await interaction.response.send_message("❌ No song is playing!", ephemeral=True)
             return
         gq.skip_requested = True
         await player.stop()  # triggers on_wavelink_track_end -> advances queue
@@ -149,15 +149,15 @@ class MusicControlView(discord.ui.View):
     async def queue_btn(self, interaction: discord.Interaction, button: discord.ui.Button):
         gq = get_queue(interaction.guild.id)
         if not gq.queue:
-            await interaction.response.send_message("📋 القائمة فارغة حاليا.", ephemeral=True)
+            await interaction.response.send_message("📋 Queue is empty right now.", ephemeral=True)
             return
         lines = []
         for i, item in enumerate(list(gq.queue)[:15], 1):
             t = item.track
             lines.append(f"`{i}.` **{t.title}** `{_fmt(t.length)}`")
         if len(gq.queue) > 15:
-            lines.append(f"*...و {len(gq.queue) - 15} أخرى*")
-        embed = discord.Embed(title="📋 القائمة الكاملة", description="\n".join(lines), color=config.EMBED_COLOR)
+            lines.append(f"*...and {len(gq.queue) - 15} more*")
+        embed = discord.Embed(title="📋 Full Queue", description="\n".join(lines), color=config.EMBED_COLOR)
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
     @discord.ui.button(emoji="👋", style=discord.ButtonStyle.danger, custom_id="music_panel_leave", row=1)
@@ -165,7 +165,7 @@ class MusicControlView(discord.ui.View):
         player: wavelink.Player = interaction.guild.voice_client
         gq = get_queue(interaction.guild.id)
         if not player:
-            await interaction.response.send_message("❌ bot mkhynch f voice!", ephemeral=True)
+            await interaction.response.send_message("❌ Bot mkhynch f voice!", ephemeral=True)
             return
         gq.queue.clear()
         gq.current = None
@@ -175,7 +175,7 @@ class MusicControlView(discord.ui.View):
         await interaction.response.defer()
         try:
             await interaction.message.edit(
-                embed=discord.Embed(description="📤 تم الخروج وإيقاف الموسيقى.", color=config.ERROR_COLOR),
+                embed=discord.Embed(description="📤 Left the room and stopped the music.", color=config.ERROR_COLOR),
                 view=None,
             )
         except Exception:
@@ -193,7 +193,7 @@ class Music(commands.Cog):
     async def _ensure_voice(self, interaction: discord.Interaction) -> "wavelink.Player | None":
         if not interaction.user.voice:
             await interaction.followup.send(
-                embed=discord.Embed(description="❌ khask tkon f voice channel!", color=config.ERROR_COLOR),
+                embed=discord.Embed(description="❌ Khask tkon f voice channel!", color=config.ERROR_COLOR),
             )
             return None
         vc_ch = interaction.user.voice.channel
@@ -210,8 +210,9 @@ class Music(commands.Cog):
             await interaction.followup.send(
                 embed=discord.Embed(
                     description=(
-                        f"❌ error voice: `{e}`\n"
-                        "-# sbr t9ad),
+                        f"❌ Error voice: `{e}`\n"
+                        "-# Try again in a moment, or check that Lavalink is connected."
+                    ),
                     color=config.ERROR_COLOR,
                 ),
             )
@@ -238,37 +239,37 @@ class Music(commands.Cog):
     def _now_playing_embed(self, gq: GuildQueue, requester: str = None) -> discord.Embed:
         t = gq.current.track
         embed = discord.Embed(
-            title="🎵 يشتغل الآن",
+            title="🎵 Now Playing",
             description=f"**[{t.title}]({t.uri or ''})**",
             color=config.SUCCESS_COLOR,
         )
-        embed.add_field(name="⏱️ المدة", value=_fmt(t.length), inline=True)
-        embed.add_field(name="🔊 الصوت", value=f"{gq.volume}%", inline=True)
-        embed.add_field(name="🔁 Loop", value="✅ مفعل" if gq.loop else "❌ موقوف", inline=True)
+        embed.add_field(name="⏱️ Duration", value=_fmt(t.length), inline=True)
+        embed.add_field(name="🔊 Volume", value=f"{gq.volume}%", inline=True)
+        embed.add_field(name="🔁 Loop", value="✅ On" if gq.loop else "❌ Off", inline=True)
         if t.artwork:
             embed.set_thumbnail(url=t.artwork)
-        embed.set_footer(text=f"{'طلبه: ' + requester + ' | ' if requester else ''}Dev: {config.DEVELOPER}")
+        embed.set_footer(text=f"{'Requested by: ' + requester + ' | ' if requester else ''}Dev: {config.DEVELOPER}")
         return embed
 
     def _panel_embed(self, gq: GuildQueue) -> discord.Embed:
         if gq.current:
             t = gq.current.track
             embed = discord.Embed(
-                title="🎛️ لوحة تحكم الموسيقى",
-                description=f"**يشتغل الآن:**\n**[{t.title}]({t.uri or ''})**",
+                title="🎛️ Music Control Panel",
+                description=f"**Now playing:**\n**[{t.title}]({t.uri or ''})**",
                 color=config.SUCCESS_COLOR,
             )
-            embed.add_field(name="⏱️ المدة", value=_fmt(t.length), inline=True)
+            embed.add_field(name="⏱️ Duration", value=_fmt(t.length), inline=True)
             if t.artwork:
                 embed.set_thumbnail(url=t.artwork)
         else:
             embed = discord.Embed(
-                title="🎛️ لوحة تحكم الموسيقى",
-                description="`لا توجد أغنية تشتغل حاليا`",
+                title="🎛️ Music Control Panel",
+                description="`No song is playing right now`",
                 color=config.EMBED_COLOR,
             )
 
-        embed.add_field(name="🔊 الصوت", value=f"{gq.volume}%", inline=True)
+        embed.add_field(name="🔊 Volume", value=f"{gq.volume}%", inline=True)
         embed.add_field(name="🔁 Loop", value="✅" if gq.loop else "❌", inline=True)
 
         if gq.queue:
@@ -277,10 +278,10 @@ class Music(commands.Cog):
                 t2 = item.track
                 lines.append(f"`{i}.` {t2.title}")
             if len(gq.queue) > 5:
-                lines.append(f"*...و {len(gq.queue) - 5} أخرى*")
-            embed.add_field(name=f"📋 القائمة ({len(gq.queue)})", value="\n".join(lines), inline=False)
+                lines.append(f"*...and {len(gq.queue) - 5} more*")
+            embed.add_field(name=f"📋 Queue ({len(gq.queue)})", value="\n".join(lines), inline=False)
         else:
-            embed.add_field(name="📋 القائمة", value="`فارغة`", inline=False)
+            embed.add_field(name="📋 Queue", value="`Empty`", inline=False)
 
         embed.set_footer(text=f"{config.BOT_NAME} | Dev: {config.DEVELOPER}")
         return embed
@@ -319,21 +320,21 @@ class Music(commands.Cog):
 
     # ── /join ────────────────────────────────────────────────────────────────
 
-    @app_commands.command(name="join", description="📥 دخول الروم الصوتي")
+    @app_commands.command(name="join", description="📥 Join the voice channel")
     async def join(self, interaction: discord.Interaction):
         await interaction.response.defer()
         player = await self._ensure_voice(interaction)
         if player:
             await interaction.followup.send(
                 embed=discord.Embed(
-                    description=f"📥 دخلت **{interaction.user.voice.channel.name}**",
+                    description=f"📥 Joined **{interaction.user.voice.channel.name}**",
                     color=config.SUCCESS_COLOR,
                 )
             )
 
     # ── /leave ───────────────────────────────────────────────────────────────
 
-    @app_commands.command(name="leave", description="📤 خروج من الروم الصوتي وإيقاف الموسيقى")
+    @app_commands.command(name="leave", description="📤 Leave the voice channel and stop the music")
     async def leave(self, interaction: discord.Interaction):
         player: wavelink.Player = interaction.guild.voice_client
         if player:
@@ -344,18 +345,18 @@ class Music(commands.Cog):
             gq.panel_message = None
             await player.disconnect()
             await interaction.response.send_message(
-                embed=discord.Embed(description="📤 تم الخروج وإيقاف الموسيقى.", color=config.EMBED_COLOR)
+                embed=discord.Embed(description="📤 Left the room and stopped the music.", color=config.EMBED_COLOR)
             )
         else:
             await interaction.response.send_message(
-                embed=discord.Embed(description="❌ البوت مش في روم صوتي!", color=config.ERROR_COLOR),
+                embed=discord.Embed(description="❌ Bot mashi f voice channel!", color=config.ERROR_COLOR),
                 ephemeral=True,
             )
 
     # ── /play ────────────────────────────────────────────────────────────────
 
-    @app_commands.command(name="play", description="🎵 تشغيل أو إضافة أغنية للقائمة")
-    @app_commands.describe(query="اسم الأغنية أو رابط (يوتيوب، ساوندكلاود...)")
+    @app_commands.command(name="play", description="🎵 Play or add a song to the queue")
+    @app_commands.describe(query="Song name or a link (YouTube, SoundCloud...)")
     async def play(self, interaction: discord.Interaction, query: str):
         await interaction.response.defer()
 
@@ -371,7 +372,7 @@ class Music(commands.Cog):
         except Exception as e:
             await interaction.followup.send(
                 embed=discord.Embed(
-                    title="❌ خطأ في البحث",
+                    title="❌ Search error",
                     description=f"`{str(e)[:300]}`",
                     color=config.ERROR_COLOR,
                 )
@@ -380,7 +381,7 @@ class Music(commands.Cog):
 
         if not results:
             await interaction.followup.send(
-                embed=discord.Embed(description="❌ ما لقيتش نتائج.", color=config.ERROR_COLOR)
+                embed=discord.Embed(description="❌ No results found.", color=config.ERROR_COLOR)
             )
             return
 
@@ -388,7 +389,7 @@ class Music(commands.Cog):
         new_tracks = results.tracks if is_playlist else [results[0]]
         if not new_tracks:
             await interaction.followup.send(
-                embed=discord.Embed(description="❌ ما لقيتش نتائج.", color=config.ERROR_COLOR)
+                embed=discord.Embed(description="❌ No results found.", color=config.ERROR_COLOR)
             )
             return
 
@@ -401,36 +402,36 @@ class Music(commands.Cog):
             embed = self._now_playing_embed(gq, requester=str(interaction.user))
         elif is_playlist:
             embed = discord.Embed(
-                title="📋 أُضيفت القائمة",
-                description=f"🎶 **{results.name}** — {len(new_tracks)} أغنية",
+                title="📋 Playlist added",
+                description=f"🎶 **{results.name}** — {len(new_tracks)} songs",
                 color=config.EMBED_COLOR,
             )
-            embed.set_footer(text=f"طلبه: {interaction.user} | Dev: {config.DEVELOPER}")
+            embed.set_footer(text=f"Requested by: {interaction.user} | Dev: {config.DEVELOPER}")
         else:
             t = new_tracks[0]
             embed = discord.Embed(
-                title="📋 أُضيف للقائمة",
+                title="📋 Added to queue",
                 description=f"**[{t.title}]({t.uri or ''})**",
                 color=config.EMBED_COLOR,
             )
-            embed.add_field(name="⏱️ المدة", value=_fmt(t.length), inline=True)
-            embed.add_field(name="📋 موقعه في القائمة", value=f"#{len(gq.queue)}", inline=True)
+            embed.add_field(name="⏱️ Duration", value=_fmt(t.length), inline=True)
+            embed.add_field(name="📋 Position in queue", value=f"#{len(gq.queue)}", inline=True)
             if t.artwork:
                 embed.set_thumbnail(url=t.artwork)
-            embed.set_footer(text=f"طلبه: {interaction.user} | Dev: {config.DEVELOPER}")
+            embed.set_footer(text=f"Requested by: {interaction.user} | Dev: {config.DEVELOPER}")
 
         await interaction.followup.send(embed=embed)
         await self._refresh_panel(gq)
 
     # ── /skip ────────────────────────────────────────────────────────────────
 
-    @app_commands.command(name="skip", description="⏭️ تخطي الأغنية الحالية")
+    @app_commands.command(name="skip", description="⏭️ Skip the current song")
     async def skip(self, interaction: discord.Interaction):
         player: wavelink.Player = interaction.guild.voice_client
         gq = get_queue(interaction.guild.id)
         if not player or not gq.current:
             await interaction.response.send_message(
-                embed=discord.Embed(description="❌ لا توجد أغنية تشتغل!", color=config.ERROR_COLOR),
+                embed=discord.Embed(description="❌ No song is playing!", color=config.ERROR_COLOR),
                 ephemeral=True,
             )
             return
@@ -440,12 +441,12 @@ class Music(commands.Cog):
         # advances the queue for us.
         await player.stop()
         await interaction.response.send_message(
-            embed=discord.Embed(description="⏭️ تم تخطي الأغنية.", color=config.SUCCESS_COLOR)
+            embed=discord.Embed(description="⏭️ Song skipped.", color=config.SUCCESS_COLOR)
         )
 
     # ── /stop ────────────────────────────────────────────────────────────────
 
-    @app_commands.command(name="stop", description="⏹️ إيقاف الموسيقى وتفريغ القائمة")
+    @app_commands.command(name="stop", description="⏹️ Stop the music and clear the queue")
     async def stop(self, interaction: discord.Interaction):
         player: wavelink.Player = interaction.guild.voice_client
         gq = get_queue(interaction.guild.id)
@@ -455,7 +456,7 @@ class Music(commands.Cog):
         if player and player.playing:
             await player.stop()
         embed = discord.Embed(
-            description="⏹️ توقفت الموسيقى وتم تفريغ القائمة.",
+            description="⏹️ Music stopped and queue cleared.",
             color=config.ERROR_COLOR,
         )
         await interaction.response.send_message(embed=embed)
@@ -463,46 +464,46 @@ class Music(commands.Cog):
 
     # ── /pause ───────────────────────────────────────────────────────────────
 
-    @app_commands.command(name="pause", description="⏸️ إيقاف مؤقت للموسيقى")
+    @app_commands.command(name="pause", description="⏸️ Pause the music")
     async def pause(self, interaction: discord.Interaction):
         player: wavelink.Player = interaction.guild.voice_client
         if player and player.playing and not player.paused:
             await player.pause(True)
             await interaction.response.send_message(
-                embed=discord.Embed(description="⏸️ تم الإيقاف المؤقت.", color=config.WARNING_COLOR)
+                embed=discord.Embed(description="⏸️ Paused.", color=config.WARNING_COLOR)
             )
             await self._refresh_panel(get_queue(interaction.guild.id))
         else:
             await interaction.response.send_message(
-                embed=discord.Embed(description="❌ لا توجد أغنية تشتغل!", color=config.ERROR_COLOR),
+                embed=discord.Embed(description="❌ No song is playing!", color=config.ERROR_COLOR),
                 ephemeral=True,
             )
 
     # ── /resume ──────────────────────────────────────────────────────────────
 
-    @app_commands.command(name="resume", description="▶️ استئناف الموسيقى")
+    @app_commands.command(name="resume", description="▶️ Resume the music")
     async def resume(self, interaction: discord.Interaction):
         player: wavelink.Player = interaction.guild.voice_client
         if player and player.paused:
             await player.pause(False)
             await interaction.response.send_message(
-                embed=discord.Embed(description="▶️ تم استئناف الموسيقى.", color=config.SUCCESS_COLOR)
+                embed=discord.Embed(description="▶️ Music resumed.", color=config.SUCCESS_COLOR)
             )
             await self._refresh_panel(get_queue(interaction.guild.id))
         else:
             await interaction.response.send_message(
-                embed=discord.Embed(description="❌ الموسيقى مش متوقفة!", color=config.ERROR_COLOR),
+                embed=discord.Embed(description="❌ Music isn't paused!", color=config.ERROR_COLOR),
                 ephemeral=True,
             )
 
     # ── /queue ───────────────────────────────────────────────────────────────
 
-    @app_commands.command(name="queue", description="📋 عرض قائمة الأغاني")
+    @app_commands.command(name="queue", description="📋 Show the song queue")
     async def queue_cmd(self, interaction: discord.Interaction):
         gq = get_queue(interaction.guild.id)
 
         embed = discord.Embed(
-            title="📋 قائمة الأغاني",
+            title="📋 Song Queue",
             color=config.EMBED_COLOR,
             timestamp=datetime.now(),
         )
@@ -510,12 +511,12 @@ class Music(commands.Cog):
         if gq.current:
             t = gq.current.track
             embed.add_field(
-                name="🎵 يشتغل الآن",
+                name="🎵 Now Playing",
                 value=f"**[{t.title}]({t.uri or ''})** `{_fmt(t.length)}`",
                 inline=False,
             )
         else:
-            embed.add_field(name="🎵 يشتغل الآن", value="`لا توجد أغنية`", inline=False)
+            embed.add_field(name="🎵 Now Playing", value="`No song playing`", inline=False)
 
         if gq.queue:
             lines = []
@@ -523,37 +524,37 @@ class Music(commands.Cog):
                 t = item.track
                 lines.append(f"`{i}.` **[{t.title}]({t.uri or ''})** `{_fmt(t.length)}`")
             if len(gq.queue) > 10:
-                lines.append(f"*...و {len(gq.queue) - 10} أغاني أخرى*")
-            embed.add_field(name="📋 القائمة", value="\n".join(lines), inline=False)
+                lines.append(f"*...and {len(gq.queue) - 10} more songs*")
+            embed.add_field(name="📋 Queue", value="\n".join(lines), inline=False)
         else:
-            embed.add_field(name="📋 القائمة", value="`القائمة فارغة`", inline=False)
+            embed.add_field(name="📋 Queue", value="`Queue is empty`", inline=False)
 
-        embed.add_field(name="🔁 Loop", value="✅ مفعل" if gq.loop else "❌ موقوف", inline=True)
-        embed.add_field(name="🔊 الصوت", value=f"{gq.volume}%", inline=True)
-        embed.add_field(name="📊 إجمالي القائمة", value=f"{len(gq.queue)} أغاني", inline=True)
+        embed.add_field(name="🔁 Loop", value="✅ On" if gq.loop else "❌ Off", inline=True)
+        embed.add_field(name="🔊 Volume", value=f"{gq.volume}%", inline=True)
+        embed.add_field(name="📊 Total in Queue", value=f"{len(gq.queue)} songs", inline=True)
         embed.set_footer(text=f"{config.BOT_NAME} | Dev: {config.DEVELOPER}")
         await interaction.response.send_message(embed=embed)
 
     # ── /nowplaying ───────────────────────────────────────────────────────────
 
-    @app_commands.command(name="nowplaying", description="🎵 معلومات الأغنية الحالية")
+    @app_commands.command(name="nowplaying", description="🎵 Show info about the current song")
     async def nowplaying(self, interaction: discord.Interaction):
         gq = get_queue(interaction.guild.id)
         if not gq.current:
             await interaction.response.send_message(
-                embed=discord.Embed(description="❌ لا توجد أغنية تشتغل!", color=config.ERROR_COLOR),
+                embed=discord.Embed(description="❌ No song is playing!", color=config.ERROR_COLOR),
                 ephemeral=True,
             )
             return
         embed = self._now_playing_embed(gq)
         embed.timestamp = datetime.now()
-        embed.add_field(name="📋 في القائمة", value=f"{len(gq.queue)} أغاني قادمة", inline=True)
+        embed.add_field(name="📋 In queue", value=f"{len(gq.queue)} upcoming songs", inline=True)
         await interaction.response.send_message(embed=embed)
 
     # ── /volume ───────────────────────────────────────────────────────────────
 
-    @app_commands.command(name="volume", description="🔊 ضبط مستوى الصوت (0-100)")
-    @app_commands.describe(level="مستوى الصوت من 0 إلى 100")
+    @app_commands.command(name="volume", description="🔊 Set the volume level (0-100)")
+    @app_commands.describe(level="Volume level, from 0 to 100")
     async def volume(self, interaction: discord.Interaction, level: app_commands.Range[int, 0, 100]):
         gq = get_queue(interaction.guild.id)
         gq.volume = level
@@ -561,7 +562,7 @@ class Music(commands.Cog):
         if player and player.connected:
             await player.set_volume(level)
         embed = discord.Embed(
-            description=f"🔊 تم ضبط الصوت على **{level}%**",
+            description=f"🔊 Volume set to **{level}%**",
             color=config.SUCCESS_COLOR,
         )
         await interaction.response.send_message(embed=embed)
@@ -569,13 +570,13 @@ class Music(commands.Cog):
 
     # ── /loop ─────────────────────────────────────────────────────────────────
 
-    @app_commands.command(name="loop", description="🔁 تفعيل/إيقاف تكرار الأغنية")
+    @app_commands.command(name="loop", description="🔁 Toggle song loop on/off")
     async def loop(self, interaction: discord.Interaction):
         gq = get_queue(interaction.guild.id)
         gq.loop = not gq.loop
-        state = "✅ مفعل" if gq.loop else "❌ موقوف"
+        state = "✅ On" if gq.loop else "❌ Off"
         embed = discord.Embed(
-            description=f"🔁 التكرار: **{state}**",
+            description=f"🔁 Loop: **{state}**",
             color=config.SUCCESS_COLOR if gq.loop else config.ERROR_COLOR,
         )
         await interaction.response.send_message(embed=embed)
@@ -583,7 +584,7 @@ class Music(commands.Cog):
 
     # ── /panel ────────────────────────────────────────────────────────────────
 
-    @app_commands.command(name="panel", description="🎛️ فتح لوحة تحكم كاملة للموسيقى (أزرار)")
+    @app_commands.command(name="panel", description="🎛️ Open a full music control panel (buttons)")
     async def panel(self, interaction: discord.Interaction):
         gq = get_queue(interaction.guild.id)
         embed = self._panel_embed(gq)
