@@ -19,25 +19,26 @@ from discord import app_commands
 
 import config
 import db
-from cogs import emoji_loader
 
 PROTECTION_COLLECTION = "protection_settings"
 
-# ─── real FastLife emojis used across this cog — resolved live from
-# Application Emojis by name; unicode only kicks in as a last-resort
-# fallback if that emoji isn't loaded/found ──────────────────────────────
-PROT_EMOJI = emoji_loader.TextEmojiMap({
-    "spam": ("11838warning", "🚫"),
-    "link": ("50494lien", "🔗"),
-    "invite": ("20806partnerids", "📩"),
-    "bot": ("95805bot", "🤖"),
-    "shield": ("45228cybersecurite", "🛡️"),
-    "logs": ("84439logs", "📋"),
-    "success": ("60226check", "✅"),
-    "error": ("8118xmark", "❌"),
-    "warning": ("11838warning", "⚠️"),
-    "kick": ("78507punishment", "👢"),
-})
+# ─── real GhostX custom emojis — hardcoded IDs pulled from the Dev Portal.
+# NOTE: this used to go through emoji_loader.TextEmojiMap(...), but that
+# class doesn't exist in cogs/emoji_loader.py, which raised an
+# AttributeError on load and prevented this whole cog from starting.
+# Hardcoding the real <:name:id> strings here removes that dependency. ──
+PROT_EMOJI = {
+    "spam": "<:11838warning:1530119891326079118>",
+    "link": "<:50494lien:1530120083337379941>",
+    "invite": "<:20806partnerids:1530119991628795990>",
+    "bot": "<:95805bot:1530120267605737562>",
+    "shield": "<:45228cybersecurite:1530120061703032882>",
+    "logs": "<:84439logs:1530120218985365645>",
+    "success": "<:60226check:1530120112194195558>",
+    "error": "<:8118xmark:1530119848494108812>",
+    "warning": "<:11838warning:1530119891326079118>",
+    "kick": "<:78507punishment:1530120192473169990>",
+}
 
 LINK_REGEX = re.compile(r"(https?://\S+|www\.\S+|discord\.gg/\S+|discordapp\.com/invite/\S+)", re.IGNORECASE)
 INVITE_REGEX = re.compile(r"(discord\.gg/\S+|discord(?:app)?\.com/invite/\S+)", re.IGNORECASE)
@@ -678,11 +679,13 @@ class Protection(commands.Cog):
 
 # أنظمة الحماية المتوفرة فـ القائمة الموحدة — key هو المفتاح فـ الـ config،
 # label/emoji/description هوما اللي كيبانو للمستخدم فـ الـ dropdown.
+# app_emoji هو نفسو الإيموجي المخصص الجاهز (<:name:id>), ماشي اسم كيتقلب
+# عليه — بلا اعتماد على emoji_loader.
 PROTECTION_SYSTEMS = [
-    {"key": "antispam",   "label": "Anti-Spam",   "emoji": "🚫", "app_emoji": "11838warning",    "description": "منع الفلود/السبام فـ الشات"},
-    {"key": "antilink",   "label": "Anti-Link",   "emoji": "🔗", "app_emoji": "50494lien",        "description": "منع الروابط (بلا دعوات ديسكورد)"},
-    {"key": "antiinvite", "label": "Anti-Invite", "emoji": "📩", "app_emoji": "20806partnerids",  "description": "منع روابط الدعوة ديال سيرفرات أخرى"},
-    {"key": "antibot",    "label": "Anti-Bot",    "emoji": "🤖", "app_emoji": "95805bot",         "description": "طرد/حظر أي بوت غير مرخص منين يدخل"},
+    {"key": "antispam",   "label": "Anti-Spam",   "emoji": "🚫", "app_emoji": PROT_EMOJI["spam"],   "description": "منع الفلود/السبام فـ الشات"},
+    {"key": "antilink",   "label": "Anti-Link",   "emoji": "🔗", "app_emoji": PROT_EMOJI["link"],   "description": "منع الروابط (بلا دعوات ديسكورد)"},
+    {"key": "antiinvite", "label": "Anti-Invite", "emoji": "📩", "app_emoji": PROT_EMOJI["invite"], "description": "منع روابط الدعوة ديال سيرفرات أخرى"},
+    {"key": "antibot",    "label": "Anti-Bot",    "emoji": "🤖", "app_emoji": PROT_EMOJI["bot"],    "description": "طرد/حظر أي بوت غير مرخص منين يدخل"},
 ]
 
 
@@ -704,7 +707,7 @@ class ProtectionSelect(discord.ui.Select):
                 label=sys["label"],
                 value=sys["key"],
                 description=sys["description"],
-                emoji=emoji_loader.get_obj(sys["app_emoji"]) or sys["emoji"],
+                emoji=sys["app_emoji"],
                 default=(gcfg.get(sys["key"], {}).get("enabled") is turn_on),
             )
             for sys in PROTECTION_SYSTEMS
@@ -722,8 +725,7 @@ class ProtectionSelect(discord.ui.Select):
         for key in self.values:
             gcfg.setdefault(key, {})["enabled"] = self.turn_on
             sys = next(s for s in PROTECTION_SYSTEMS if s["key"] == key)
-            e = emoji_loader.get_obj(sys["app_emoji"]) or sys["emoji"]
-            changed.append(f"{e} {sys['label']}")
+            changed.append(f"{sys['app_emoji']} {sys['label']}")
         self.cog._save_guild_cfg(interaction.guild_id, gcfg)
 
         state = "✅ تفعّلو" if self.turn_on else "❌ توقفو"
