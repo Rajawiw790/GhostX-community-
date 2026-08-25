@@ -5,79 +5,105 @@ from discord.ext import commands
 from discord import app_commands
 
 
+MAX_MESSAGES = 20
+DELAY = 0.4
+
+
 def _msg(emoji, title, **fields):
     lines = [f"{emoji} **{title}**"]
-    for k, v in fields.items():
-        lines.append(f"› **{k}:** {v}")
+
+    for key, value in fields.items():
+        lines.append(f"› **{key}:** {value}")
+
     return "\n".join(lines)
 
 
 class SpamTest(commands.Cog):
-    """
-    Owner-only testing utility. Sends a controlled burst of test messages
-    in the current channel so you can verify anti_spam.py actually
-    triggers (timeout, purge, log message) on your own server.
-
-    NOT a real spam tool: capped at 20 messages, owner-only, and meant
-    to be deleted/disabled once you're done testing.
-    """
 
     def __init__(self, bot: commands.Bot):
         self.bot = bot
 
     @app_commands.command(
         name="spam-test",
-        description="[أونر فقط] يبعت رسائل تجريبية باش يختبر نظام مكافحة السبام",
+        description="يرسل رسالة اختبار من اختيارك",
     )
-    @app_commands.describe(count="عدد الرسائل التجريبية (أقصى حد 20)")
-    async def spam_test(self, interaction: discord.Interaction, count: int = 8):
-        if interaction.user.id != interaction.guild.owner_id and not interaction.user.guild_permissions.administrator:
-            await interaction.response.send_message(
-                _msg("⛔", "ممنوع", **{"السبب": "هاد الأمر خاص بالأونر أو الأدمن فقط"}),
-                ephemeral=True,
-            )
-            return
-
-        count = max(1, min(count, 20))  # hard cap, this is a test tool not a spam tool
+    @app_commands.describe(
+        message="الرسالة التي تريد إرسالها",
+        count="عدد الرسائل، أقصى حد 20",
+    )
+    async def spam_test(
+        self,
+        interaction: discord.Interaction,
+        message: str,
+        count: int = 8,
+    ):
+        count = max(1, min(count, MAX_MESSAGES))
 
         await interaction.response.send_message(
-            _msg("🧪", "بدء الاختبار", **{"عدد الرسائل": count, "القناة": interaction.channel.mention}),
+            _msg(
+                "🧪",
+                "بدء الاختبار",
+                **{
+                    "الرسالة": message,
+                    "العدد": count,
+                    "المكان": (
+                        interaction.channel.mention
+                        if interaction.guild
+                        else "DM"
+                    ),
+                },
+            ),
             ephemeral=True,
         )
 
         for i in range(count):
             try:
-                await interaction.channel.send(f"test message {i + 1}/{count}")
-            except discord.HTTPException:
+                await interaction.channel.send(message)
+            except (discord.Forbidden, discord.HTTPException):
                 break
-            await asyncio.sleep(0.4)  # small delay so we don't get globally rate-limited
+
+            await asyncio.sleep(DELAY)
 
     @app_commands.command(
         name="spam-test-duplicate",
-        description="[أونر فقط] يبعت نفس الرسالة بالتكرار باش يختبر duplicate detection",
+        description="يكرر رسالة من اختيارك لاختبار Duplicate Detection",
     )
-    @app_commands.describe(count="عدد التكرارات (أقصى حد 20)")
-    async def spam_test_duplicate(self, interaction: discord.Interaction, count: int = 5):
-        if interaction.user.id != interaction.guild.owner_id and not interaction.user.guild_permissions.administrator:
-            await interaction.response.send_message(
-                _msg("⛔", "ممنوع", **{"السبب": "هاد الأمر خاص بالأونر أو الأدمن فقط"}),
-                ephemeral=True,
-            )
-            return
-
-        count = max(1, min(count, 20))
+    @app_commands.describe(
+        message="الرسالة التي تريد تكرارها",
+        count="عدد التكرارات، أقصى حد 20",
+    )
+    async def spam_test_duplicate(
+        self,
+        interaction: discord.Interaction,
+        message: str,
+        count: int = 5,
+    ):
+        count = max(1, min(count, MAX_MESSAGES))
 
         await interaction.response.send_message(
-            _msg("🧪", "بدء اختبار التكرار", **{"عدد الرسائل": count}),
+            _msg(
+                "🧪",
+                "بدء اختبار Duplicate Detection",
+                **{
+                    "الرسالة": message,
+                    "العدد": count,
+                    "المكان": (
+                        interaction.channel.mention
+                        if interaction.guild
+                        else "DM"
+                    ),
+                },
+            ),
             ephemeral=True,
         )
 
         for _ in range(count):
             try:
-                await interaction.channel.send("same message")
-            except discord.HTTPException:
+                await interaction.channel.send(message)
+            except (discord.Forbidden, discord.HTTPException):
                 break
-            await asyncio.sleep(0.4)
+
+            await asyncio.sleep(DELAY)
 
 
 async def setup(bot: commands.Bot):
