@@ -5,6 +5,7 @@ from discord.ext import tasks
 import config
 from datetime import datetime
 import asyncio
+import io
 import db
 
 from cogs import panel_settings
@@ -92,6 +93,8 @@ BUTTON_DEFAULTS = {
     "close_emoji": "🔒",
     "claim_label": "Claim",
     "claim_emoji": "📋",
+    "add_label":   "Add Member",
+    "add_emoji":   "➕",
 }
 
 def load_btn() -> dict:
@@ -176,40 +179,31 @@ async def _create_ticket(interaction: discord.Interaction, problem_text: str):
         await interaction.followup.send(f"❌ Failed to create ticket channel: {e}", ephemeral=True)
         return
 
-    # ── Build the ticket embed ──────────────────────────────────────────
+    # ── Build the ticket panel (Components V2) ──────────────────────────
     # NOTE: this note is intentionally SHORT and SEPARATE from the panel's
     # "Need help? / Please: ..." instructions block — it used to reuse
     # panel_message / ticket_instructions_text (and even the panel banner),
     # which duplicated the whole panel post inside every opened ticket.
     note_text = cfg.get("ticket_note") or "Our team will be with you shortly."
     reason_label = panel_settings.get("ticket_reason_label") or "Ticket Reason"
-
-    opened_line = f"{interaction.user.mention} • <t:{int(datetime.now().timestamp())}:R>"
-    if support_role:
-        opened_line += f" • {support_role.mention}"
-
-    embed = discord.Embed(
-        title=f"🎫 Ticket — {interaction.user.display_name}",
-        description=f"**{reason_label}**\n>>> {problem_text[:350]}",
-        color=config.EMBED_COLOR,
-        timestamp=datetime.now(),
-    )
-    embed.set_thumbnail(url=interaction.user.display_avatar.url)
-    # banner_url is intentionally NOT set here anymore — it stays on the
-    # panel post only, so it's not duplicated in every ticket channel.
-
-    embed.add_field(name="Opened by", value=opened_line, inline=False)
-    embed.add_field(name="Note", value=note_text[:200], inline=False)
-    embed.set_footer(text=f"{config.BOT_NAME} | Dev: {config.DEVELOPER}")
+    opened_ts = int(datetime.now().timestamp())
 
     ping_parts = [interaction.user.mention]
     if support_role:
         ping_parts.append(support_role.mention)
 
+    view = TicketControlView(
+        owner=interaction.user,
+        support_role=support_role,
+        reason_label=reason_label,
+        problem_text=problem_text,
+        note_text=note_text,
+        opened_ts=opened_ts,
+    )
+
     await ticket_channel.send(
         content=" ".join(ping_parts),
-        embed=embed,
-        view=TicketControlView(),
+        view=view,
         allowed_mentions=discord.AllowedMentions(users=True, roles=True),
     )
     await interaction.followup.send(
@@ -230,39 +224,163 @@ async def _create_ticket(interaction: discord.Interaction, problem_text: str):
     save_activity(activity)
 
 
-# ─── Ticket Panel Button (on /ticket setup panel) ──────────────────────────
-class TicketCreateView(discord.ui.View):
+# ─── Ticket Panel Button (on /ticket setup panel) — Components V2 ──────────
+class TicketCreateView(discord.ui.LayoutView):
     def __init__(self):
         super().__init__(timeout=None)
         btn = load_btn()
+
+        container = discord.ui.Container(accent_colour=config.EMBED_COLOR)
+        container.add_item(discord.ui.TextDisplay(
+            f"## 🎫 {config.BOT_NAME} — Support\n"
+            "Need help? Press the button below to open a private ticket "
+            "with our support team."
+        ))
+        container.add_item(discord.ui.Separator())
+
+        row = discord.ui.ActionRow()
         button = discord.ui.Button(
             label=btn["open_label"],
             emoji=btn["open_emoji"],
             style=STYLE_MAP.get(btn.get("open_style", "primary"), discord.ButtonStyle.primary),
-            custom_id="ticket_open"
+            custom_id="ticket_open",
         )
         button.callback = self.open_ticket
-        self.add_item(button)
+        row.add_item(button)
+        container.add_item(row)
+
+        self.add_item(container)
 
     async def open_ticket(self, interaction: discord.Interaction):
         await interaction.response.send_modal(ProblemModal())
 
 
-# ─── Ticket Control Buttons (inside the ticket channel) ────────────────────
-class TicketControlView(discord.ui.View):
+# ─── Add Member select (used inside the ticket control panel) ─────────────
+class AddMemberSelect(discord.ui.UserSelect):
     def __init__(self):
+        super().__init__(
+            placeholder="اختار العضو لي بغيتي تزيدو للتذكرة...",
+            min_values=1,
+            max_values=1,
+            custom_id="ticket_add_member_select",
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+        ts = load_tickets()
+        cfg = ts.get(str(interaction.guild_id), {})
+        if not _is_support_staff(interaction.user, cfg):
+            await interaction.response.send_message(
+                "❌ Only support staff can add members to a ticket.", ephemeral=True
+            )
+            return
+
+        member = self.values[0]
+        try:
+            await interaction.channel.set_permissions(
+                member, read_messages=True, send_messages=True, attach_files=True
+            )
+        except Exception as e:
+            await interaction.response.send_message(f"❌ Failed to add member: {e}", ephemeral=True)
+            return
+
+        await interaction.response.send_message(
+            f"➕ {member.mention} has been added to this ticket by {interaction.user.mention}.",
+            allowed_mentions=discord.AllowedMentions(users=True),
+        )
+
+
+# ─── Ticket Control Panel (inside the ticket channel) — Components V2 ─────
+class TicketControlView(discord.ui.LayoutView):
+    def __init__(self, owner: discord.Member = None, support_role: discord.Role = None,
+                 reason_label: str = "Ticket Reason", problem_text: str = "",
+                 note_text: str = "", opened_ts: int = None, claimed_by: int = None):
         super().__init__(timeout=None)
         btn = load_btn()
-        self.claim.label = btn["claim_label"]
-        self.claim.emoji = btn["claim_emoji"]
-        self.close.label = btn["close_label"]
-        self.close.emoji = btn["close_emoji"]
-        self.support_panel.label = panel_settings.get("ticket_support_panel_label") or "Support Panel"
-        self.support_panel.emoji = panel_settings.get("ticket_support_panel_emoji") or "🛠️"
+        self.owner = owner
+        self.support_role = support_role
 
-    @discord.ui.button(label="Claim", emoji="📋", style=discord.ButtonStyle.success, custom_id="ticket_claim")
-    async def claim(self, interaction: discord.Interaction, button: discord.ui.Button):
-        # Check if user has support role or is admin
+        container = discord.ui.Container(accent_colour=config.EMBED_COLOR)
+
+        # ── Header section with the owner's avatar as a thumbnail ──
+        header_text = discord.ui.TextDisplay(
+            f"## 🎫 Ticket — {owner.display_name if owner else 'Unknown'}\n"
+            f"**{reason_label}**\n>>> {problem_text[:350] if problem_text else '—'}"
+        )
+        if owner:
+            container.add_item(discord.ui.Section(
+                header_text,
+                accessory=discord.ui.Thumbnail(media=owner.display_avatar.url),
+            ))
+        else:
+            container.add_item(header_text)
+
+        container.add_item(discord.ui.Separator())
+
+        opened_line = f"{owner.mention if owner else '—'} • " + (
+            f"<t:{opened_ts}:R>" if opened_ts else "—"
+        )
+        if support_role:
+            opened_line += f" • {support_role.mention}"
+
+        status_line = (
+            f"🔒 Claimed by <@{claimed_by}>" if claimed_by else "🔓 Not claimed yet"
+        )
+
+        container.add_item(discord.ui.TextDisplay(
+            f"**Opened by:** {opened_line}\n"
+            f"**Note:** {note_text[:200] if note_text else '—'}\n"
+            f"**Status:** {status_line}"
+        ))
+        container.add_item(discord.ui.Separator())
+
+        # ── Action buttons row ──
+        row = discord.ui.ActionRow()
+
+        self.claim_button = discord.ui.Button(
+            label=(f"Claimed by {self._member_name(claimed_by)}" if claimed_by else btn["claim_label"]),
+            emoji=btn["claim_emoji"],
+            style=discord.ButtonStyle.success,
+            custom_id="ticket_claim",
+            disabled=bool(claimed_by),
+        )
+        self.claim_button.callback = self.claim
+        row.add_item(self.claim_button)
+
+        self.close_button = discord.ui.Button(
+            label=btn["close_label"],
+            emoji=btn["close_emoji"],
+            style=discord.ButtonStyle.danger,
+            custom_id="ticket_close_btn",
+        )
+        self.close_button.callback = self.close
+        row.add_item(self.close_button)
+
+        self.add_member_button = discord.ui.Button(
+            label=btn["add_label"],
+            emoji=btn["add_emoji"],
+            style=discord.ButtonStyle.secondary,
+            custom_id="ticket_add_member_btn",
+        )
+        self.add_member_button.callback = self.open_add_member
+        row.add_item(self.add_member_button)
+
+        self.support_panel_button = discord.ui.Button(
+            label=panel_settings.get("ticket_support_panel_label") or "Support Panel",
+            emoji=panel_settings.get("ticket_support_panel_emoji") or "🛠️",
+            style=discord.ButtonStyle.secondary,
+            custom_id="ticket_support_panel",
+        )
+        self.support_panel_button.callback = self.support_panel
+        row.add_item(self.support_panel_button)
+
+        container.add_item(row)
+        self.add_item(container)
+
+    @staticmethod
+    def _member_name(user_id):
+        return f"<@{user_id}>" if user_id else "?"
+
+    async def claim(self, interaction: discord.Interaction):
         ts = load_tickets()
         cfg = ts.get(str(interaction.guild_id), {})
         if not _is_support_staff(interaction.user, cfg):
@@ -279,9 +397,6 @@ class TicketControlView(discord.ui.View):
             )
             return
 
-        # Lock the ticket to this claimer — from now on only they (or the
-        # ticket owner) can close it. Build the record if one doesn't exist
-        # yet (e.g. ticket created before this tracking existed).
         if not rec:
             rec = {
                 "guild_id": interaction.guild_id,
@@ -295,25 +410,18 @@ class TicketControlView(discord.ui.View):
         activity[ch_key] = rec
         save_activity(activity)
 
-        embed = discord.Embed(
-            title="📋 Ticket Claimed",
-            description=(
-                f"This ticket has been claimed by {interaction.user.mention}.\n"
-                f"🔒 Only {interaction.user.mention} or the ticket owner can close it from now on."
-            ),
-            color=config.SUCCESS_COLOR,
-            timestamp=datetime.now()
+        # Lock the claim button on the panel itself
+        self.claim_button.disabled = True
+        self.claim_button.label = f"Claimed by {interaction.user.display_name}"
+        await interaction.response.edit_message(view=self)
+
+        await interaction.followup.send(
+            f"📋 Ticket claimed by {interaction.user.mention} — "
+            f"only they or the ticket owner can close it from now on.",
+            allowed_mentions=discord.AllowedMentions(users=True),
         )
-        embed.set_footer(text=f"{config.BOT_NAME} | Dev: {config.DEVELOPER}")
-        await interaction.response.send_message(embed=embed)
 
-        # Disable the claim button
-        button.disabled = True
-        button.label = f"Claimed by {interaction.user.display_name}"
-        await interaction.message.edit(view=self)
-
-    @discord.ui.button(label="Close", emoji="🔒", style=discord.ButtonStyle.danger, custom_id="ticket_close_btn")
-    async def close(self, interaction: discord.Interaction, button: discord.ui.Button):
+    async def close(self, interaction: discord.Interaction):
         ts = load_tickets()
         cfg = ts.get(str(interaction.guild_id), {})
         if not _can_close_ticket(interaction.user, interaction.channel, cfg):
@@ -328,37 +436,52 @@ class TicketControlView(discord.ui.View):
                 await interaction.response.send_message("❌ Only support staff or the ticket owner can close this.", ephemeral=True)
             return
 
-        await interaction.response.send_message(
-            embed=discord.Embed(
-                title="🔒 Closing Ticket",
-                description="This ticket will be closed and logged in 5 seconds...",
-                color=config.WARNING_COLOR
-            )
+        for item in (self.claim_button, self.close_button, self.add_member_button, self.support_panel_button):
+            item.disabled = True
+        await interaction.response.edit_message(view=self)
+
+        await interaction.followup.send(
+            "🔒 **Closing Ticket** — this ticket will be closed and logged in 5 seconds..."
         )
         await asyncio.sleep(5)
         await _save_transcript_and_delete(interaction.channel, interaction.guild)
 
-    @discord.ui.button(label="Support Panel", emoji="🛠️", style=discord.ButtonStyle.secondary, custom_id="ticket_support_panel")
-    async def support_panel(self, interaction: discord.Interaction, button: discord.ui.Button):
+    async def open_add_member(self, interaction: discord.Interaction):
+        ts = load_tickets()
+        cfg = ts.get(str(interaction.guild_id), {})
+        if not _is_support_staff(interaction.user, cfg):
+            await interaction.response.send_message("❌ Only support staff can add members.", ephemeral=True)
+            return
+
+        picker = discord.ui.LayoutView(timeout=120)
+        container = discord.ui.Container(accent_colour=config.EMBED_COLOR)
+        container.add_item(discord.ui.TextDisplay("### ➕ Add a member to this ticket"))
+        row = discord.ui.ActionRow()
+        row.add_item(AddMemberSelect())
+        container.add_item(row)
+        picker.add_item(container)
+
+        await interaction.response.send_message(view=picker, ephemeral=True)
+
+    async def support_panel(self, interaction: discord.Interaction):
         ts = load_tickets()
         cfg = ts.get(str(interaction.guild_id), {})
         support_role = interaction.guild.get_role(cfg.get("support_role_id") or 0)
         claimed_by = _get_claimed_by(interaction.channel_id)
         claimer = interaction.guild.get_member(claimed_by) if claimed_by else None
 
-        embed = discord.Embed(
-            title="🛠️ Support Panel",
-            description=(
-                f"{'👥 Support role: ' + support_role.mention if support_role else '⚠️ No support role configured.'}\n"
-                f"{'🔒 Claimed by: ' + claimer.mention if claimer else '🔓 Not claimed yet.'}\n\n"
-                "**Available commands in this ticket:**\n"
-                "`/ticket-add` — add another member to this ticket\n"
-                "`/ticket-close` — close this ticket"
-            ),
-            color=config.EMBED_COLOR
-        )
-        embed.set_footer(text=f"{config.BOT_NAME} | Dev: {config.DEVELOPER}")
-        await interaction.response.send_message(embed=embed, ephemeral=True)
+        view = discord.ui.LayoutView(timeout=None)
+        container = discord.ui.Container(accent_colour=config.EMBED_COLOR)
+        container.add_item(discord.ui.TextDisplay(
+            "### 🛠️ Support Panel\n"
+            f"{'👥 Support role: ' + support_role.mention if support_role else '⚠️ No support role configured.'}\n"
+            f"{'🔒 Claimed by: ' + claimer.mention if claimer else '🔓 Not claimed yet.'}\n\n"
+            "**Available commands in this ticket:**\n"
+            "`/ticket-add` — add another member to this ticket\n"
+            "`/ticket-close` — close this ticket"
+        ))
+        view.add_item(container)
+        await interaction.response.send_message(view=view, ephemeral=True)
 
 
 # ─── Transcript save and channel delete ─────────────────────────────────────
@@ -381,22 +504,22 @@ async def _save_transcript_and_delete(channel: discord.TextChannel, guild: disco
 
             transcript_text = "\n".join(lines) if lines else "No messages."
             buf = transcript_text.encode("utf-8")
-
-            import io
             file_obj = discord.File(io.BytesIO(buf), filename=f"transcript-{channel.name}.txt")
 
             # Find ticket owner from topic
             owner_id = channel.topic
             owner_mention = f"<@{owner_id}>" if owner_id else "Unknown"
 
-            embed = discord.Embed(
-                title="📄 Ticket Transcript",
-                description=f"**Channel:** #{channel.name}\n**Owner:** {owner_mention}\n**Closed at:** <t:{int(datetime.now().timestamp())}:F>",
-                color=config.EMBED_COLOR,
-                timestamp=datetime.now()
-            )
-            embed.set_footer(text=f"{config.BOT_NAME} | Dev: {config.DEVELOPER}")
-            await log_channel.send(embed=embed, file=file_obj)
+            log_view = discord.ui.LayoutView(timeout=None)
+            log_container = discord.ui.Container(accent_colour=config.EMBED_COLOR)
+            log_container.add_item(discord.ui.TextDisplay(
+                "### 📄 Ticket Transcript\n"
+                f"**Channel:** #{channel.name}\n"
+                f"**Owner:** {owner_mention}\n"
+                f"**Closed at:** <t:{int(datetime.now().timestamp())}:F>"
+            ))
+            log_view.add_item(log_container)
+            await log_channel.send(view=log_view, file=file_obj)
 
     try:
         await channel.delete()
@@ -467,22 +590,22 @@ class Tickets(commands.Cog):
                     ts = load_tickets()
                     cfg = ts.get(str(rec.get("guild_id")), {})
                     support_role = guild.get_role(cfg.get("support_role_id") or 0)
-                    embed = discord.Embed(
-                        title="⏰ Still waiting on a reply",
-                        description=(
-                            f"No one from support has answered this ticket in over "
-                            f"**{INACTIVITY_SECONDS // 3600} hours**. It will close "
-                            f"automatically in **{CLOSE_GRACE_SECONDS // 60} minutes** "
-                            f"if it stays quiet."
-                        ),
-                        color=config.WARNING_COLOR,
-                        timestamp=datetime.now(),
-                    )
-                    embed.set_footer(text=f"{config.BOT_NAME} | Dev: {config.DEVELOPER}")
+
+                    warn_view = discord.ui.LayoutView(timeout=None)
+                    warn_container = discord.ui.Container(accent_colour=config.WARNING_COLOR)
+                    warn_container.add_item(discord.ui.TextDisplay(
+                        "### ⏰ Still waiting on a reply\n"
+                        f"No one from support has answered this ticket in over "
+                        f"**{INACTIVITY_SECONDS // 3600} hours**. It will close "
+                        f"automatically in **{CLOSE_GRACE_SECONDS // 60} minutes** "
+                        f"if it stays quiet."
+                    ))
+                    warn_view.add_item(warn_container)
+
                     try:
                         await channel.send(
                             content=support_role.mention if support_role else None,
-                            embed=embed,
+                            view=warn_view,
                             allowed_mentions=discord.AllowedMentions(roles=True),
                         )
                     except Exception:
@@ -491,13 +614,37 @@ class Tickets(commands.Cog):
                     rec["warned_at"] = now
                     activity[ch_key] = rec
                     changed = True
-                else:
-                    if now - rec.get("warned_at", now) >= CLOSE_GRACE_SECONDS:
-                        await _save_transcript_and_delete(channel, guild)  # untracks internally
-                        activity.pop(ch_key, None)
-                        changed = True
-            except Exception as e:
-                print(f"[Tickets] inactivity check failed for channel {ch_key}: {e}")
+                    continue
+
+                # Already warned — check the close grace period
+                warned_at = rec.get("warned_at") or now
+                last_since_warn = rec.get("last_reply_at") or warned_at
+                if last_since_warn > warned_at:
+                    # Staff replied after the warning — reset
+                    rec["warned"] = False
+                    rec["warned_at"] = None
+                    activity[ch_key] = rec
+                    changed = True
+                    continue
+
+                if now - warned_at >= CLOSE_GRACE_SECONDS:
+                    try:
+                        close_view = discord.ui.LayoutView(timeout=None)
+                        close_container = discord.ui.Container(accent_colour=config.WARNING_COLOR)
+                        close_container.add_item(discord.ui.TextDisplay(
+                            "### 🔒 Auto-closing ticket\n"
+                            "This ticket had no support reply and is being closed automatically."
+                        ))
+                        close_view.add_item(close_container)
+                        await channel.send(view=close_view)
+                    except Exception:
+                        pass
+                    await _save_transcript_and_delete(channel, guild)
+                    activity.pop(ch_key, None)
+                    changed = True
+
+            except Exception:
+                continue
 
         if changed:
             save_activity(activity)
@@ -505,238 +652,6 @@ class Tickets(commands.Cog):
     @check_inactive_tickets.before_loop
     async def before_check_inactive_tickets(self):
         await self.bot.wait_until_ready()
-
-    # ─── /ticket setup — every field is a real picker, nothing to type by hand ──
-    @ticket_group.command(name="setup", description="⚙️ Set up the ticket system")
-    @app_commands.describe(
-        panel_channel="Channel where the ticket panel (Open Ticket button) will be posted",
-        category="Category where new ticket channels will be created (optional)",
-        support_role="Role that can see and claim tickets (optional)",
-        log_channel="Channel where closed ticket transcripts are sent (optional)",
-        panel_title="Title of the panel embed (optional)",
-        panel_message="Panel embed description (optional)",
-        banner_url="Banner image URL for the panel embed (optional)",
-    )
-    async def ticket_setup(
-        self,
-        interaction: discord.Interaction,
-        panel_channel: discord.TextChannel,
-        category: discord.CategoryChannel = None,
-        support_role: discord.Role = None,
-        log_channel: discord.TextChannel = None,
-        panel_title: str = None,
-        panel_message: str = None,
-        banner_url: str = None,
-    ):
-        cfg = {
-            "panel_channel_id": panel_channel.id,
-            "category_id": category.id if category else None,
-            "support_role_id": support_role.id if support_role else None,
-            "log_channel_id": log_channel.id if log_channel else None,
-            "panel_title": panel_title or "🎫 Support Tickets",
-            "panel_message": panel_message or "Our support team will be with you shortly.",
-            "banner_url": banner_url or "",
-        }
-        ts = load_tickets()
-        # keep ticket_note if it was already set via /ticket customize
-        existing = ts.get(str(interaction.guild_id), {})
-        if "ticket_note" in existing:
-            cfg["ticket_note"] = existing["ticket_note"]
-        ts[str(interaction.guild_id)] = cfg
-        save_tickets(ts)
-
-        panel_embed = discord.Embed(
-            title=cfg["panel_title"],
-            description=cfg["panel_message"],
-            color=config.EMBED_COLOR
-        )
-        if cfg["banner_url"]:
-            panel_embed.set_image(url=cfg["banner_url"])
-        panel_embed.set_footer(text=f"{config.BOT_NAME} | Dev: {config.DEVELOPER}")
-
-        try:
-            await panel_channel.send(embed=panel_embed, view=TicketCreateView())
-        except Exception as e:
-            await interaction.response.send_message(f"❌ Failed to send panel: {e}", ephemeral=True)
-            return
-
-        await interaction.response.send_message(embed=self._summary_embed("✅ Ticket System Set Up!", panel_channel, category, support_role, log_channel), ephemeral=True)
-
-    # ─── /ticket update — only fill in what changes ─────────────────────────
-    @ticket_group.command(name="update", description="✏️ Update ticket settings — only fill in what you want to change")
-    @app_commands.describe(
-        panel_channel="New panel channel (optional)",
-        category="New ticket category (optional)",
-        support_role="New support role (optional)",
-        log_channel="New transcript log channel (optional)",
-        panel_title="New panel embed title (optional)",
-        panel_message="New panel description (optional)",
-        banner_url="New banner image URL for the panel embed (optional)",
-    )
-    async def ticket_update(
-        self,
-        interaction: discord.Interaction,
-        panel_channel: discord.TextChannel = None,
-        category: discord.CategoryChannel = None,
-        support_role: discord.Role = None,
-        log_channel: discord.TextChannel = None,
-        panel_title: str = None,
-        panel_message: str = None,
-        banner_url: str = None,
-    ):
-        ts = load_tickets()
-        guild_id = str(interaction.guild_id)
-        cfg = ts.get(guild_id)
-        if not cfg:
-            await interaction.response.send_message("❌ Ticket system not set up yet. Use `/ticket setup` first.", ephemeral=True)
-            return
-
-        if panel_channel: cfg["panel_channel_id"] = panel_channel.id
-        if category:      cfg["category_id"] = category.id
-        if support_role:  cfg["support_role_id"] = support_role.id
-        if log_channel:   cfg["log_channel_id"] = log_channel.id
-        if panel_title:   cfg["panel_title"] = panel_title
-        if panel_message: cfg["panel_message"] = panel_message
-        if banner_url is not None: cfg["banner_url"] = banner_url
-
-        ts[guild_id] = cfg
-        save_tickets(ts)
-
-        p_ch  = interaction.guild.get_channel(cfg.get("panel_channel_id") or 0)
-        cat   = interaction.guild.get_channel(cfg.get("category_id") or 0)
-        s_role= interaction.guild.get_role(cfg.get("support_role_id") or 0)
-        l_ch  = interaction.guild.get_channel(cfg.get("log_channel_id") or 0)
-        await interaction.response.send_message(embed=self._summary_embed("✅ Ticket Settings Updated!", p_ch, cat, s_role, l_ch), ephemeral=True)
-
-    # ─── /ticket remove ──────────────────────────────────────────────────────
-    @ticket_group.command(name="remove", description="🗑️ Remove the ticket system setup")
-    async def ticket_remove(self, interaction: discord.Interaction):
-        ts = load_tickets()
-        ts.pop(str(interaction.guild_id), None)
-        save_tickets(ts)
-        embed = discord.Embed(
-            title="🗑️ Ticket System Removed",
-            description="The ticket system has been disabled for this server.",
-            color=config.ERROR_COLOR
-        )
-        embed.set_footer(text=f"{config.BOT_NAME} | Dev: {config.DEVELOPER}")
-        await interaction.response.send_message(embed=embed, ephemeral=True)
-
-    # ─── /ticket customize — button labels/emoji/color + short ticket note ─
-    @ticket_group.command(name="customize", description="🎨 Customize ticket buttons (label/emoji/color) and the short note shown inside tickets")
-    @app_commands.describe(
-        open_label="Open-ticket button label (optional)", open_emoji="Open-ticket button emoji (optional)",
-        open_style="Open-ticket button color (optional)",
-        claim_label="Claim button label (optional)", claim_emoji="Claim button emoji (optional)",
-        close_label="Close button label (optional)", close_emoji="Close button emoji (optional)",
-        ticket_note="Short note shown inside every opened ticket, NOT the panel text (optional)",
-    )
-    @app_commands.choices(open_style=[
-        app_commands.Choice(name="Blurple", value="primary"),
-        app_commands.Choice(name="Gray", value="secondary"),
-        app_commands.Choice(name="Green", value="success"),
-        app_commands.Choice(name="Red", value="danger"),
-    ])
-    async def ticket_customize(
-        self,
-        interaction: discord.Interaction,
-        open_label: str = None, open_emoji: str = None,
-        open_style: app_commands.Choice[str] = None,
-        claim_label: str = None, claim_emoji: str = None,
-        close_label: str = None, close_emoji: str = None,
-        ticket_note: str = None,
-    ):
-        if not any([open_label, open_emoji, open_style, claim_label, claim_emoji, close_label, close_emoji, ticket_note]):
-            await interaction.response.send_message("❌ Provide at least one field to change.", ephemeral=True)
-            return
-
-        btn = load_btn()
-        if open_label:  btn["open_label"] = open_label
-        if open_emoji:  btn["open_emoji"] = open_emoji
-        if open_style:  btn["open_style"] = open_style.value
-        if claim_label: btn["claim_label"] = claim_label
-        if claim_emoji: btn["claim_emoji"] = claim_emoji
-        if close_label: btn["close_label"] = close_label
-        if close_emoji: btn["close_emoji"] = close_emoji
-        save_btn(btn)
-
-        if ticket_note:
-            ts = load_tickets()
-            guild_id = str(interaction.guild_id)
-            cfg = ts.get(guild_id, {})
-            cfg["ticket_note"] = ticket_note
-            ts[guild_id] = cfg
-            save_tickets(ts)
-
-        embed = discord.Embed(
-            title="✅ Ticket Panel Customized",
-            description=(
-                "Button changes apply next time `/ticket setup` posts a new panel.\n"
-                "The ticket note applies to newly opened tickets."
-            ),
-            color=config.SUCCESS_COLOR
-        )
-        await interaction.response.send_message(embed=embed, ephemeral=True)
-
-    # ── Add member to ticket ──────────────────────────────────────────────
-    @app_commands.command(name="ticket-add", description="👤 Add a member to the current ticket")
-    @app_commands.describe(member="The member to add")
-    async def ticket_add(self, interaction: discord.Interaction, member: discord.Member):
-        if not interaction.channel.name.startswith("ticket-"):
-            await interaction.response.send_message("❌ This command only works inside a ticket channel.", ephemeral=True)
-            return
-        ts = load_tickets()
-        cfg = ts.get(str(interaction.guild_id), {})
-        if not _is_support_staff(interaction.user, cfg):
-            await interaction.response.send_message("❌ Support staff only.", ephemeral=True)
-            return
-        await interaction.channel.set_permissions(member, read_messages=True, send_messages=True)
-        embed = discord.Embed(
-            title="✅ Member Added",
-            description=f"{member.mention} has been added to this ticket.",
-            color=config.SUCCESS_COLOR
-        )
-        embed.set_thumbnail(url=member.display_avatar.url)
-        embed.set_footer(text=f"{config.BOT_NAME} | Dev: {config.DEVELOPER}")
-        await interaction.response.send_message(embed=embed)
-
-    # ── Close ticket by command ───────────────────────────────────────────
-    @app_commands.command(name="ticket-close", description="🔒 Close the current ticket")
-    async def ticket_close(self, interaction: discord.Interaction):
-        if not interaction.channel.name.startswith("ticket-"):
-            await interaction.response.send_message("❌ This command only works inside a ticket channel.", ephemeral=True)
-            return
-        ts = load_tickets()
-        cfg = ts.get(str(interaction.guild_id), {})
-        if not _can_close_ticket(interaction.user, interaction.channel, cfg):
-            claimed_by = _get_claimed_by(interaction.channel_id)
-            if claimed_by:
-                claimer = interaction.guild.get_member(claimed_by)
-                await interaction.response.send_message(
-                    f"❌ This ticket is claimed by {claimer.mention if claimer else 'another staff member'} — "
-                    f"only they or the ticket owner can close it.", ephemeral=True
-                )
-            else:
-                await interaction.response.send_message("❌ Only the ticket owner or support staff can close this.", ephemeral=True)
-            return
-        embed = discord.Embed(
-            title="🔒 Closing Ticket",
-            description="Saving transcript and closing in 5 seconds...",
-            color=config.WARNING_COLOR
-        )
-        await interaction.response.send_message(embed=embed)
-        await asyncio.sleep(5)
-        await _save_transcript_and_delete(interaction.channel, interaction.guild)
-
-    # ─── helper ─────────────────────────────────────────────────────────────
-    def _summary_embed(self, title, panel_channel, category, support_role, log_channel) -> discord.Embed:
-        embed = discord.Embed(title=title, color=config.SUCCESS_COLOR)
-        embed.add_field(name="📢 Panel Channel", value=panel_channel.mention if panel_channel else "❌ Not set", inline=True)
-        embed.add_field(name="🗂️ Category",      value=category.mention if category else "None", inline=True)
-        embed.add_field(name="🏷️ Support Role",  value=support_role.mention if support_role else "None", inline=True)
-        embed.add_field(name="📄 Log Channel",   value=log_channel.mention if log_channel else "None", inline=True)
-        embed.set_footer(text=f"{config.BOT_NAME} | Dev: {config.DEVELOPER}")
-        return embed
 
 
 async def setup(bot):
