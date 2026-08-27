@@ -192,6 +192,10 @@ async def _create_ticket(interaction: discord.Interaction, problem_text: str):
     if support_role:
         ping_parts.append(support_role.mention)
 
+    # NOTE: Components V2 messages (LayoutView) cannot carry a `content` field —
+    # Discord rejects the request if you try. So the ping line has to live
+    # inside a TextDisplay component instead; allowed_mentions still governs
+    # whether it actually notifies.
     view = TicketControlView(
         owner=interaction.user,
         support_role=support_role,
@@ -199,10 +203,10 @@ async def _create_ticket(interaction: discord.Interaction, problem_text: str):
         problem_text=problem_text,
         note_text=note_text,
         opened_ts=opened_ts,
+        ping_line=" ".join(ping_parts),
     )
 
     await ticket_channel.send(
-        content=" ".join(ping_parts),
         view=view,
         allowed_mentions=discord.AllowedMentions(users=True, roles=True),
     )
@@ -293,13 +297,21 @@ class AddMemberSelect(discord.ui.UserSelect):
 class TicketControlView(discord.ui.LayoutView):
     def __init__(self, owner: discord.Member = None, support_role: discord.Role = None,
                  reason_label: str = "Ticket Reason", problem_text: str = "",
-                 note_text: str = "", opened_ts: int = None, claimed_by: int = None):
+                 note_text: str = "", opened_ts: int = None, claimed_by: int = None,
+                 ping_line: str = None):
         super().__init__(timeout=None)
         btn = load_btn()
         self.owner = owner
         self.support_role = support_role
 
         container = discord.ui.Container(accent_colour=config.EMBED_COLOR)
+
+        # Components V2 messages can't use `content` for pings, so the mention
+        # line (owner + support role) is rendered as its own TextDisplay at
+        # the top of the container instead. allowed_mentions on the send()
+        # call still controls whether this actually notifies anyone.
+        if ping_line:
+            container.add_item(discord.ui.TextDisplay(ping_line))
 
         # ── Header section with the owner's avatar as a thumbnail ──
         header_text = discord.ui.TextDisplay(
@@ -593,18 +605,22 @@ class Tickets(commands.Cog):
 
                     warn_view = discord.ui.LayoutView(timeout=None)
                     warn_container = discord.ui.Container(accent_colour=config.WARNING_COLOR)
-                    warn_container.add_item(discord.ui.TextDisplay(
-                        "### ⏰ Still waiting on a reply\n"
+                    # Ping line goes inside the component text — `content` is
+                    # not allowed alongside a Components V2 view.
+                    warn_text = "### ⏰ Still waiting on a reply\n"
+                    if support_role:
+                        warn_text = f"{support_role.mention}\n" + warn_text
+                    warn_text += (
                         f"No one from support has answered this ticket in over "
                         f"**{INACTIVITY_SECONDS // 3600} hours**. It will close "
                         f"automatically in **{CLOSE_GRACE_SECONDS // 60} minutes** "
                         f"if it stays quiet."
-                    ))
+                    )
+                    warn_container.add_item(discord.ui.TextDisplay(warn_text))
                     warn_view.add_item(warn_container)
 
                     try:
                         await channel.send(
-                            content=support_role.mention if support_role else None,
                             view=warn_view,
                             allowed_mentions=discord.AllowedMentions(roles=True),
                         )
